@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+*.spec
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Nuitka build
+*.build/
+*.dist/
+*.onefile-build/
+
+# Venvs
+.venv/
+venv/
+env/
+ENV/
+
+# Logs / runtime
+error.log
+*.log
+*.tmp
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Perfis/configs locais do usuário (não commitar dados pessoais)
+profiles/
+*.profile.json
+config.json
+settings.local.json
+
+# Macros gravadas localmente (privacidade)
+macros/
+*.macro.json
+
+# Secrets / env
+.env
+.env.*
+secrets/
