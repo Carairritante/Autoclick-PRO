@@ -1,0 +1,306 @@
+============================================================
+  AutoClick Pro — TUDO QUE ELE FAZ
+============================================================
+
+Imagina que voce tem um assistente invisivel no computador que faz
+QUALQUER tarefa repetitiva pra voce. Clica, digita, espera, decide,
+encadeia... tudo enquanto voce ta de boa fazendo outra coisa.
+
+Esse e o AutoClick Pro. Da pra usar em jogos, em trabalho, pra
+testes, pra automatizar coisas chatas que tomam o seu dia.
+
+Tudo de graca, sem login, sem nuvem, sem propaganda.
+
+
+------------------------------------------------------------
+  1. CLICKER AUTOMATICO
+------------------------------------------------------------
+
+O basico: o mouse clica sozinho. Mas com superpoderes.
+
+  - Clica numa posicao fixa, na posicao do cursor, ou numa
+    SEQUENCIA de pontos diferentes em ordem.
+  - Esquerdo, direito ou meio. Click simples ou duplo.
+  - Rajada (burst): N cliques de uma vez em cada disparo.
+  - Intervalo configuravel em horas, minutos, segundos e ms.
+  - "Humanizacao": adiciona variacao no tempo entre cliques
+    pra parecer humano de verdade.
+  - "Jitter": variacao no pixel exato do clique (mesma ideia).
+  - Modo "Por Janela": clica numa janela ESPECIFICA sem mover
+    o cursor real do mouse. Voce pode estar mexendo em outra
+    janela enquanto o clicker trabalha em outra.
+  - Modo Simultaneo: dispara cliques em VARIOS pontos AO MESMO
+    TEMPO numa sequencia. Util pra acionar varios botoes juntos.
+  - Repete pra sempre ou um numero exato de vezes.
+  - Som a cada clique se voce quiser feedback auditivo.
+
+  Exemplo real: jogo de farm onde voce precisa clicar num botao
+  a cada 2 segundos por 30 minutos. Configura uma vez e vai
+  tomar um cafe.
+
+
+------------------------------------------------------------
+  2. AUTO-DIGITADOR (AutoKeyboard)
+------------------------------------------------------------
+
+Digita texto sozinho, repetidamente, do jeito que voce quiser.
+
+  - Funciona com qualquer caractere: acentos (a, c, e), simbolos
+    (R$, EUR), emojis, qualquer Unicode.
+  - Tokens especiais no meio do texto: {ENTER}, {TAB}, {F1}..{F12},
+    {UP}/{DOWN}/{LEFT}/{RIGHT}, etc. Da pra montar sequencias
+    inteiras de teclas.
+  - Modo "Colar": em vez de digitar letra por letra, copia o texto
+    pro clipboard e da Ctrl+V. Bem mais rapido em apps como Discord,
+    Notepad, e WhatsApp Web.
+  - Intervalo aleatorio entre min/max ms: mais natural, dificil
+    de detectar como bot.
+  - Aperta Enter sozinho no fim de cada repeticao se voce marcar.
+  - Repete N vezes ou pra sempre.
+  - Delay inicial de 3 segundos pra voce focar na janela certa.
+
+  Exemplo real: precisa enviar a mesma mensagem em 50 chats
+  diferentes de um sistema. Cola o texto, marca "Enter automatico",
+  define repeticoes = 50, e vai trocando de chat a cada disparo.
+
+
+------------------------------------------------------------
+  3. MACRO — ROBO INTELIGENTE
+------------------------------------------------------------
+
+Aqui mora a verdadeira magia. Macro e uma SEQUENCIA DE ACOES
+que o programa executa em ordem. Voce monta visualmente, sem
+codigo, e ele faz tudo.
+
+ACOES DISPONIVEIS NO EDITOR:
+
+  Click / DoubleClick / RightClick
+      Clica num ponto exato (X,Y) ou na posicao atual do cursor.
+
+  Mover
+      So move o cursor pra um ponto, sem clicar.
+
+  Arrastar (NOVO)
+      Clica num ponto A, segura, arrasta ate o ponto B e solta.
+      Funciona ate em jogos pesados como Roblox.
+      Exemplo: girar a camera no jogo, mover uma carta de um
+      lugar pra outro, selecionar um trecho de texto.
+
+  Digitar
+      Escreve texto literal. Pode usar tokens como {ENTER} no meio.
+
+  Aguardar (X ms)
+      Pausa por um tempo fixo.
+
+  Aguardar Imagem (NOVO)
+      Espera uma imagem APARECER ou SUMIR da tela antes de
+      continuar. Voce captura a imagem com o mouse arrastando
+      uma regiao.
+      Exemplo: espera a tela de "Carregando..." sumir antes de
+      clicar em "Jogar". Se o load demorar mais, ele espera; se
+      for rapido, continua na hora.
+
+  Scroll
+      Rola pra cima ou pra baixo numa quantidade exata.
+
+  Tecla (Key Press)
+      Aperta uma tecla qualquer: Space, F5, Esc, Ctrl+C, etc.
+      Funciona no Roblox e jogos com Raw Input (graca a uma
+      tecnica chamada SendInput com scan codes).
+
+  Pixel Check
+      Le a cor de um pixel exato e DECIDE: se a cor bate, pula
+      N steps; senao, continua normal. E como um "if" visual.
+
+  Image Click
+      Acha uma imagem na tela e clica nela automaticamente.
+      Voce define uma confianca (50%-100%) e um timeout.
+      Exemplo: clica num botao mesmo que ele mude de posicao
+      a cada vez.
+
+  OCR (Ler Texto)
+      Le texto de qualquer regiao da tela e guarda em uma
+      variavel. Pode forcar so numeros, restringir caracteres
+      ("whitelist"), e escolher idioma (PT, EN, ES, JP, etc).
+      Exemplo: le o nivel do seu personagem na tela e usa
+      esse numero pra decidir se continua jogando ou para.
+
+  Set Variavel
+      Cria/altera variaveis: set, add (+), sub (-), mul (x),
+      div (/), concat (juntar texto).
+      Tambem da pra LER do clipboard (NOVO) ou ESCREVER no
+      clipboard (NOVO) a partir de uma variavel.
+
+  Chamar Macro (NOVO)
+      Um macro chama outro macro! Da pra criar "blocos"
+      reutilizaveis. Exemplo: voce tem um macro "fazer login".
+      Em vez de repetir esses 5 steps em cada novo macro,
+      voce so chama o "fazer login" no comeco e pronto. Aceita
+      tanto os slots (1, 2, 3) quanto arquivos .json externos.
+
+  If / Else / EndIf
+      Logica condicional de verdade. Se variavel = X, faz isso;
+      senao, faz aquilo. Pode comparar variaveis, presenca de
+      imagem, ou cor de pixel.
+
+
+CONTROLES DO MACRO:
+
+  Velocidade ajustavel: 0.5x (camera lenta), 1x, 2x, 4x.
+
+  Pausar / Retomar (NOVO)
+      Aperta a tecla Pause/Break no meio da execucao pra
+      CONGELAR o macro. Aperta de novo pra CONTINUAR do mesmo
+      ponto. Sem precisar reiniciar tudo.
+
+  Step-by-step (Debug)
+      O macro espera voce apertar "Proximo Step" pra cada acao.
+      Util pra entender o que ele esta fazendo, achar erro.
+
+  Notificar ao Terminar (NOVO)
+      Mostra uma notificacao na bandeja do Windows quando o
+      macro termina ou para por uma condicao. Voce pode deixar
+      ele rodando enquanto faz outra coisa e ser avisado.
+
+  Coordenadas Relativas a Janela
+      Se voce ativar "janela alvo", as coordenadas viram
+      proporcionais ao tamanho dela. O macro funciona MESMO
+      se voce mudar o tamanho ou mover a janela depois.
+
+  Stop Conditions (Condicoes de Parada)
+      Macro para automaticamente se: aparecer uma imagem
+      especifica, um pixel bater certa cor, ou uma variavel
+      atingir um valor.
+      Exemplo: para de farmar se aparecer a tela "Game Over".
+
+
+------------------------------------------------------------
+  4. GRAVADOR DE MACRO
+------------------------------------------------------------
+
+Nao quer montar macro click-a-click? GRAVE!
+
+Aperta F10, faz as acoes manualmente (cliques + teclado), e
+aperta F10 de novo pra parar. Pronto: virou macro editavel.
+Voce ainda pode editar os steps gravados, mudar delays, etc.
+
+
+------------------------------------------------------------
+  5. HOTSTRINGS — ATALHOS DE TEXTO (NOVO)
+------------------------------------------------------------
+
+Isso aqui economiza HORAS da sua vida.
+
+Voce define um "trigger" (texto curto) e uma "expansao" (texto
+longo). Em QUALQUER lugar do Windows que voce digitar o trigger,
+ele apaga e digita a expansao automaticamente.
+
+  Exemplos:
+    ":mail:"  ->  "seu_nome@gmail.com"
+    ":end:"   ->  "Atenciosamente,\nNicolas Gabriel"
+    ":pix:"   ->  "Chave PIX: 123.456.789-00"
+    ":bug:"   ->  "Estou recebendo o erro X quando faco Y..."
+
+  Funciona em browser, chat, codigo, formulario, qualquer
+  lugar. E opt-in: voce ATIVA quando quiser (toggle), e
+  desativa quando nao. Cada atalho pode ser ligado/desligado
+  individualmente.
+
+
+------------------------------------------------------------
+  6. HOTKEYS GLOBAIS
+------------------------------------------------------------
+
+Atalhos de teclado que funcionam de qualquer lugar do Windows,
+mesmo com o app minimizado:
+
+  F6   - Liga/desliga AutoClick
+  F7   - Liga/desliga AutoKeyboard
+  F8   - Parada de emergencia (mata tudo)
+  F9   - Executa/para o Macro
+  F10  - Inicia/para a Gravacao
+  Pause/Break - Pausa/Retoma o macro (NOVO)
+
+Todos sao reconfiguraveis nas Configuracoes. Aperta "Alterar"
+e pressiona a tecla que voce quer.
+
+
+------------------------------------------------------------
+  7. SEGURANCA & CONTROLE
+------------------------------------------------------------
+
+  PARADA DE EMERGENCIA: jogue o mouse pro canto SUPERIOR
+  ESQUERDO da tela rapidamente. Para TUDO instantaneamente.
+  E uma rede de seguranca caso algo de errado.
+
+  Variaveis e estado: tudo fica na memoria; ao terminar nao
+  resta nada. Os dados que voce salva ficam apenas em arquivos
+  JSON no seu PC.
+
+  Atomic save: quando salva um perfil ou hotstring, escreve em
+  arquivo temporario primeiro e so depois substitui o original.
+  Se travar no meio, nao corrompe nada.
+
+
+------------------------------------------------------------
+  8. PERFIS — 3 SLOTS + ARQUIVOS
+------------------------------------------------------------
+
+Voce pode salvar CONFIGURACOES COMPLETAS em 3 slots rapidos,
+ou exportar pra arquivo JSON pra mandar pra um amigo.
+
+Cada slot guarda:
+  - Configuracoes de AutoClick + AutoKeyboard
+  - Todos os steps do macro
+  - Stop conditions
+  - Velocidade, debug, notificacao
+  - Preferencias da interface (temas, hotkeys, som)
+
+Quer trocar de tarefa? Carrega o slot e ja era.
+
+
+------------------------------------------------------------
+  9. EXTRAS
+------------------------------------------------------------
+
+  - Tray icon: minimiza pra bandeja do Windows ao fechar.
+  - Tema escuro / claro com botao de troca.
+  - Tela cheia (F11) pra editar macros longos.
+  - Failsafe pra cursor em (0,0).
+  - Instalacao "sem dor": o instalar.bat baixa Python e
+    Tesseract OCR automaticamente se faltarem.
+  - Detecta versao anterior e oferece UPGRADE preservando
+    seus perfis ja salvos.
+  - Desinstalador gerado automaticamente na pasta.
+
+
+------------------------------------------------------------
+  10. POR QUE USAR?
+------------------------------------------------------------
+
+  Voce vai economizar tempo em qualquer coisa repetitiva:
+
+  Jogos: farm, eventos, click frenetico, eventos auto, captcha
+         simples, abrir baus, plantar/colher, pesca, etc.
+
+  Trabalho: preencher formulario gigante, mandar mensagens em
+           massa, testar interface, navegar sistemas legados,
+           coletar dados de tela.
+
+  Estudo: simular interacao com sites/apps, automatizar tarefas
+         de pesquisa, montar testes.
+
+  Acessibilidade: pra quem tem dificuldade motora, configurar
+                 uma sequencia rapida que faz tudo com 1 tecla.
+
+
+------------------------------------------------------------
+  EM 1 LINHA
+------------------------------------------------------------
+
+E um automatizador "faz tudo" do Windows, sem codigo, com
+gravador, editor visual, variaveis, condicoes, OCR, encadear
+macros, hotstrings, pausar/retomar, e modo "invisivel" que
+trabalha em outra janela enquanto voce usa o PC normalmente.
+
+Pega o instalar.bat. Roda. Pronto.

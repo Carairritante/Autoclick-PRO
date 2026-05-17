@@ -1,0 +1,55 @@
+# ─── Perfis e configuração pessoal ────────────────────────────────
+# profiles/ntfy.json contém o topic_id (= senha do seu celular)
+# profiles/slot*.json contém seus macros pessoais
+# profiles/hotstrings.json contém suas hotstrings
+# profiles/window.json contém posição/tamanho da janela
+profiles/
+*.bak
+
+# ─── Builds (Nuitka / PyInstaller) ────────────────────────────────
+build/
+dist/
+*.spec
+AutoClickPro.dist/
+AutoClickPro.build/
+AutoClickPro.onefile-build/
+*.exe
+*.dll
+*.pyd
+*.so
+
+# ─── Pacote distribuível (regerar via package.bat) ────────────────
+AutoClickPro.zip
+
+# ─── Python ───────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ─── Ambientes virtuais ───────────────────────────────────────────
+venv/
+.venv/
+env/
+.env
+
+# ─── IDE / editores ───────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── Sistema operacional ──────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+$RECYCLE.BIN/
+
+# ─── Logs e temporários ───────────────────────────────────────────
+*.log
+*.tmp
