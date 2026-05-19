@@ -18,7 +18,7 @@ from core.ntfy_client import Monitor
 from ui.widgets import make_button
 
 
-TRIGGER_TYPES = ["image", "pixel", "event"]
+TRIGGER_TYPES = ["image", "pixel", "text", "event"]
 EVENT_NAMES   = [
     "macro_started",
     "macro_stopped",
@@ -31,6 +31,11 @@ EVENT_LABELS: dict[str, str] = {
     "macro_stopped_by_cond": "Macro parou por Stop Condition",
     "hotstring_fired":       "Hotstring disparou",
 }
+TEXT_MATCH_MODES = ["contains", "exact", "regex"]
+# Idiomas Tesseract comuns. eng/por padrão; outros se o user instalou pacotes.
+OCR_LANGS = ["eng", "por", "spa", "fra", "deu", "ita", "jpn", "chi_sim"]
+# Tipos que aceitam restrição a janela alvo (pixel usa coords absolutas)
+TYPES_WITH_WINDOW_TARGET = {"image", "text"}
 
 
 class MonitorDialog(tk.Toplevel):
@@ -72,6 +77,26 @@ class MonitorDialog(tk.Toplevel):
         # Event
         self._v_event = tk.StringVar(value=m.event_name if m and m.event_name
                                       else "macro_stopped")
+        # Text (OCR)
+        self._v_text_to_find = tk.StringVar(value=m.text_to_find if m else "")
+        self._v_text_match   = tk.StringVar(
+            value=m.text_match_mode if m else "contains")
+        self._v_text_case    = tk.BooleanVar(
+            value=bool(m.text_case_sensitive) if m else False)
+        self._v_text_lang    = tk.StringVar(value=m.text_lang if m else "eng")
+        self._v_text_conf    = tk.StringVar(
+            value=str(m.text_min_confidence if m else 50))
+        # Mensagem custom + destinos
+        self._v_custom_msg   = m.custom_message if m else ""
+        self._v_notify_phone = tk.BooleanVar(
+            value=bool(m.notify_phone) if m else True)
+        self._v_notify_pc    = tk.BooleanVar(
+            value=bool(m.notify_pc) if m else True)
+        # Janela alvo
+        self._target_hwnd: int     = (m.target_hwnd if m else 0)
+        self._target_win_name: str = (m.target_win_name if m else "")
+        self._lbl_target_win: tk.Label | None = None
+        self._custom_msg_text: tk.Text | None = None  # criado em _build
 
         self._build()
         self._v_type.trace_add("write", lambda *_: self._refresh_fields())
@@ -106,10 +131,61 @@ class MonitorDialog(tk.Toplevel):
                      state="readonly", width=12, font=("Segoe UI", 10)
                      ).pack(side="left", padx=8)
 
+        # Janela alvo (visível só pra image/text — _refresh_fields esconde)
+        self._target_frame = tk.Frame(p, bg=T["bg"])
+        self._target_frame.pack(fill="x", padx=16, pady=(4, 0))
+        tk.Label(self._target_frame, text="🎯 Janela alvo:",
+                 bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 10)
+                 ).pack(side="left")
+        self._lbl_target_win = tk.Label(
+            self._target_frame,
+            text=self._target_label_text(),
+            bg=T["card"], fg=T["text"], font=("Segoe UI", 9),
+            padx=8, pady=3, anchor="w", width=28)
+        self._lbl_target_win.pack(side="left", padx=6)
+        make_button(self._target_frame, "Selecionar", self._pick_target_window,
+                    T["card"], fg=T["text"], padx=8).pack(side="left", padx=2)
+        make_button(self._target_frame, "✕", self._clear_target_window,
+                    T["card"], fg=T["text"], padx=6).pack(side="left", padx=2)
+        tk.Label(p, text="Vazio = lê a tela inteira. Com janela = só lê dentro dela.",
+                 bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                 ).pack(anchor="w", padx=16, pady=(0, 4))
+
         # Frame dinâmico (varia por tipo)
         self._fields = tk.Frame(p, bg=T["bg"])
         self._fields.pack(fill="x", padx=16, pady=4)
         self._refresh_fields()
+
+        # Mensagem personalizada
+        msg_lbl = tk.Frame(p, bg=T["bg"])
+        msg_lbl.pack(fill="x", padx=16, pady=(8, 0))
+        tk.Label(msg_lbl, text="💬 Mensagem da notificação (opcional):",
+                 bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 10)
+                 ).pack(side="left")
+        self._custom_msg_text = tk.Text(
+            p, height=2, bg=T["card"], fg=T["text"],
+            insertbackground=T["text"], font=("Consolas", 10),
+            relief="flat", bd=4, padx=6, pady=4, wrap="word")
+        self._custom_msg_text.pack(fill="x", padx=16, pady=(2, 0))
+        if self._v_custom_msg:
+            self._custom_msg_text.insert("1.0", self._v_custom_msg)
+        tk.Label(p, text="Vazio = usa o nome do monitor.",
+                 bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                 ).pack(anchor="w", padx=16, pady=(0, 6))
+
+        # Destinos da notificação
+        dest_row = tk.Frame(p, bg=T["bg"])
+        dest_row.pack(fill="x", padx=16, pady=(4, 0))
+        tk.Checkbutton(dest_row, text="📱 Celular (ntfy)",
+                        variable=self._v_notify_phone,
+                        bg=T["bg"], fg=T["text"], selectcolor=T.get("sel", "#7a1a1a"),
+                        activebackground=T["bg"], font=("Segoe UI", 10)
+                        ).pack(side="left", padx=(0, 12))
+        tk.Checkbutton(dest_row, text="🖥️ Bandeja do PC",
+                        variable=self._v_notify_pc,
+                        bg=T["bg"], fg=T["text"], selectcolor=T.get("sel", "#7a1a1a"),
+                        activebackground=T["bg"], font=("Segoe UI", 10)
+                        ).pack(side="left")
 
         # Cooldown
         cd_row = tk.Frame(p, bg=T["bg"])
@@ -145,11 +221,53 @@ class MonitorDialog(tk.Toplevel):
         make_button(btns, "✕ Cancelar", self.destroy, T["card"], fg=T["text"],
                     padx=12, pady=6).pack(side="left")
 
+    # ─────────────────────────────────────────────────────────────
+    # JANELA ALVO
+    # ─────────────────────────────────────────────────────────────
+    def _target_label_text(self) -> str:
+        if not self._target_hwnd:
+            return "Tela inteira"
+        name = self._target_win_name or f"hwnd #{self._target_hwnd}"
+        return (name[:26] + "…") if len(name) > 26 else name
+
+    def _refresh_target_label(self) -> None:
+        if self._lbl_target_win:
+            self._lbl_target_win.config(text=self._target_label_text())
+
+    def _pick_target_window(self) -> None:
+        from ui.window_picker import pick_window
+        result = pick_window(
+            self, self._T,
+            title_text="Selecionar Janela do Monitor",
+            prompt="Escolha a janela que o monitor vai vigiar:",
+        )
+        if result is None:
+            return
+        self._target_hwnd, self._target_win_name = result
+        self._refresh_target_label()
+
+    def _clear_target_window(self) -> None:
+        self._target_hwnd = 0
+        self._target_win_name = ""
+        self._refresh_target_label()
+
     def _refresh_fields(self) -> None:
         T = self._T
         f = self._fields
         for w in f.winfo_children():
             w.destroy()
+
+        # Esconde/mostra a seção "janela alvo" conforme o tipo
+        t = self._v_type.get()
+        if hasattr(self, "_target_frame") and self._target_frame:
+            if t in TYPES_WITH_WINDOW_TARGET:
+                if not self._target_frame.winfo_ismapped():
+                    self._target_frame.pack(
+                        fill="x", padx=16, pady=(4, 0),
+                        before=self._fields,
+                    )
+            else:
+                self._target_frame.pack_forget()
 
         def lbl(text, row, col=0):
             tk.Label(f, text=text, bg=T["bg"], fg=T["subtext"],
@@ -161,8 +279,6 @@ class MonitorDialog(tk.Toplevel):
                      insertbackground=T["text"], font=("Consolas", 11),
                      justify="center", relief="flat", bd=4
                      ).grid(row=row, column=col, sticky="w")
-
-        t = self._v_type.get()
 
         if t == "image":
             make_button(f, "📷 Capturar Região", self._capture_image,
@@ -204,6 +320,40 @@ class MonitorDialog(tk.Toplevel):
             tk.Label(f, text="Alerta dispara quando o pixel bater com a cor.",
                      bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
                      ).grid(row=6, column=0, columnspan=4, sticky="w")
+
+        elif t == "text":
+            lbl("Texto a procurar:", 0)
+            tk.Entry(f, textvariable=self._v_text_to_find, width=32,
+                     bg=T["card"], fg=T["text"], insertbackground=T["text"],
+                     font=("Consolas", 11), relief="flat", bd=4
+                     ).grid(row=0, column=1, columnspan=3, sticky="w")
+            lbl("Modo de match:", 1)
+            ttk.Combobox(f, textvariable=self._v_text_match,
+                          values=TEXT_MATCH_MODES, state="readonly",
+                          width=10, font=("Segoe UI", 10)
+                          ).grid(row=1, column=1, sticky="w")
+            tk.Checkbutton(f, text="Diferenciar maiúsc./minúsc.",
+                            variable=self._v_text_case,
+                            bg=T["bg"], fg=T["text"], selectcolor=T.get("sel", "#7a1a1a"),
+                            activebackground=T["bg"], font=("Segoe UI", 9)
+                            ).grid(row=1, column=2, columnspan=2, sticky="w", padx=8)
+            lbl("Idioma OCR:", 2)
+            ttk.Combobox(f, textvariable=self._v_text_lang,
+                          values=OCR_LANGS, state="readonly",
+                          width=8, font=("Segoe UI", 10)
+                          ).grid(row=2, column=1, sticky="w")
+            lbl("Confiança mín.:", 3)
+            tk.Spinbox(f, textvariable=self._v_text_conf, from_=0, to=100,
+                       width=5, bg=T["card"], fg=T["text"], relief="flat",
+                       font=("Consolas", 10)
+                       ).grid(row=3, column=1, sticky="w")
+            tk.Label(f, text="(0-100, descarta leituras abaixo)",
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                     ).grid(row=3, column=2, columnspan=2, sticky="w", padx=4)
+            tk.Label(f, text="Alerta dispara quando o texto aparecer (precisa Tesseract OCR instalado).",
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8),
+                     wraplength=420, justify="left"
+                     ).grid(row=4, column=0, columnspan=4, sticky="w", pady=(4, 0))
 
         elif t == "event":
             lbl("Evento:", 0)
@@ -356,12 +506,25 @@ class MonitorDialog(tk.Toplevel):
         enabled = bool(self._v_enabled.get())
         screenshot = bool(self._v_screenshot.get())
 
+        # Mensagem custom + destinos + janela alvo (comuns a todos os tipos)
+        custom_msg = ""
+        if self._custom_msg_text:
+            try:
+                custom_msg = self._custom_msg_text.get("1.0", "end-1c").strip()
+            except Exception:
+                custom_msg = ""
+
         mon = Monitor(
             name=name,
             trigger_type=ttype,
             cooldown_s=cd,
             enabled=enabled,
             attach_screenshot=screenshot,
+            custom_message=custom_msg,
+            notify_phone=bool(self._v_notify_phone.get()),
+            notify_pc=bool(self._v_notify_pc.get()),
+            target_hwnd=self._target_hwnd if ttype in TYPES_WITH_WINDOW_TARGET else 0,
+            target_win_name=self._target_win_name if ttype in TYPES_WITH_WINDOW_TARGET else "",
         )
 
         if ttype == "image":
@@ -375,6 +538,12 @@ class MonitorDialog(tk.Toplevel):
             b = max(0, min(255, _int(self._v_b)))
             mon.color_rgb = [r, g, b]
             mon.color_tolerance = max(0, min(255, _int(self._v_tol, 10)))
+        elif ttype == "text":
+            mon.text_to_find        = self._v_text_to_find.get().strip()
+            mon.text_match_mode     = self._v_text_match.get() or "contains"
+            mon.text_case_sensitive = bool(self._v_text_case.get())
+            mon.text_lang           = self._v_text_lang.get() or "eng"
+            mon.text_min_confidence = max(0, min(100, _int(self._v_text_conf, 50)))
         elif ttype == "event":
             mon.event_name = self._v_event.get() or "macro_stopped"
 

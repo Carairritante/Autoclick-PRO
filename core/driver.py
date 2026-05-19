@@ -237,16 +237,35 @@ class WindowsDriver:
         x: int | None = None,
         y: int | None = None,
         dy: int = 3,
+        smooth: bool = False,
+        smooth_substeps_per_unit: int = 6,
+        smooth_step_ms: int = 30,
     ) -> None:
         """Rola o scroll vertical na posição dada via SendInput.
 
         windll: user32.SendInput com MOUSEEVENTF_WHEEL — substitui mouse_event legado.
         dy positivo = scroll para cima, negativo = scroll para baixo.
+
+        smooth=False: 1 evento de wheel de dy unidades — comportamento clássico
+                      (parece "puxão" em apps que não interpolam scroll).
+        smooth=True:  quebra cada unidade em N micro-scrolls com sleep entre eles
+                      — visualmente fluido em navegadores, PDFs, leitores. Custa
+                      |dy| * substeps eventos + (substeps-1) * sleeps.
         """
         if x is not None and y is not None:
             nx, ny = self._normalize_coords(x, y)
             self._send_mouse(_MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_MOVE, dx=nx, dy=ny)
-        self._send_mouse(_MOUSEEVENTF_WHEEL, data=int(dy * _WHEEL_DELTA))
+        if not smooth or dy == 0:
+            self._send_mouse(_MOUSEEVENTF_WHEEL, data=int(dy * _WHEEL_DELTA))
+            return
+        sub_per_unit = max(1, smooth_substeps_per_unit)
+        total = abs(dy) * sub_per_unit
+        sub_delta = (_WHEEL_DELTA // sub_per_unit) * (1 if dy > 0 else -1)
+        step_s = max(0, smooth_step_ms) / 1000
+        for i in range(total):
+            self._send_mouse(_MOUSEEVENTF_WHEEL, data=sub_delta)
+            if step_s > 0 and i < total - 1:
+                time.sleep(step_s)
 
     def perform_drag(
         self,
@@ -663,10 +682,12 @@ class WindowsDriver:
         image_data_b64: str | None,
         threshold: float = 0.9,
         timeout_ms: int = 0,
+        region: tuple[int, int, int, int] | None = None,
     ) -> tuple[int, int, int, int] | None:
         """Procura imagem template na tela. Retorna (left, top, w, h) ou None.
 
         timeout_ms=0 = uma única tentativa; >0 = retry até encontrar ou timeout.
+        region: (x, y, w, h) limita a busca a uma área; None = tela inteira.
         Usa pyautogui.locateOnScreen (requer Pillow + opencv-python).
         """
         if not image_data_b64:
@@ -686,7 +707,11 @@ class WindowsDriver:
         last_err: Exception | None = None
         while True:
             try:
-                found = pyautogui.locateOnScreen(tpl_img, confidence=max(0.5, min(1.0, threshold)))
+                found = pyautogui.locateOnScreen(
+                    tpl_img,
+                    confidence=max(0.5, min(1.0, threshold)),
+                    region=region,
+                )
             except Exception as exc:
                 found = None
                 last_err = exc

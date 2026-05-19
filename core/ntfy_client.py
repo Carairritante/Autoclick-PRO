@@ -29,17 +29,18 @@ from typing import Callable
 
 @dataclass
 class Monitor:
-    """Define um gatilho que dispara notificação ao celular.
+    """Define um gatilho que dispara notificação ao celular e/ou PC.
 
     trigger_type:
       - "image": acionado se imagem aparece na tela (find_image_on_screen)
       - "pixel": acionado se pixel (x,y) tem cor color_rgb ± tolerance
+      - "text":  acionado se texto aparece via OCR (find_text_on_screen)
       - "event": acionado por evento programático (fire_event), event_name=:
                  macro_started, macro_stopped, macro_stopped_by_cond, hotstring_fired
       - "var":   reservado, ainda não implementado (depende de ctx do macro)
     """
     name: str = ""
-    trigger_type: str = "image"          # "image" | "pixel" | "var" | "event"
+    trigger_type: str = "image"          # "image" | "pixel" | "text" | "var" | "event"
     # Imagem (mesmo formato de StopCondition)
     image_data: str | None = None        # PNG base64
     image_threshold: float = 0.9
@@ -48,12 +49,26 @@ class Monitor:
     y: int | None = None
     color_rgb: list | None = None
     color_tolerance: int = 10
+    # Texto (OCR)
+    text_to_find: str = ""
+    text_match_mode: str = "contains"    # "contains" | "exact" | "regex"
+    text_case_sensitive: bool = False
+    text_lang: str = "eng"               # "eng" | "por" | "spa" | etc
+    text_min_confidence: int = 50        # 0-100, descarta leituras abaixo
     # Variável (placeholder)
     var_name: str = ""
     var_op: str = "=="
     var_value: str = ""
     # Evento
     event_name: str = ""                 # "macro_started" | "macro_stopped" | etc
+    # Mensagem personalizada — vazio = usa f"Disparou: {name}"
+    custom_message: str = ""
+    # Destino da notificação
+    notify_phone: bool = True            # ntfy.sh (celular)
+    notify_pc:    bool = True            # bandeja do Windows (pystray.notify)
+    # Restrição a janela alvo (image/text usam como região; pixel ignora)
+    target_hwnd: int = 0                 # 0 = tela inteira
+    target_win_name: str = ""            # só pra UI mostrar
     # Ação
     enabled: bool = True
     cooldown_s: int = 30                 # anti-spam: não dispara 2x no intervalo
@@ -115,6 +130,9 @@ class NtfyClient:
         # Recebe (raw_message, status) — status: "fired", "filtered:echo",
         # "filtered:not_allowed", "filtered:empty"
         self.on_activity: Callable[[str, str], None] | None = None
+        # Notificação local (bandeja do Windows) — recebe (message, title).
+        # Settado pela UI; pode ser None se PIL/pystray indisponíveis.
+        self.on_pc_notify: Callable[[str, str], None] | None = None
 
     # ─────────────────────────────────────────────────────────────
     # Topic management
@@ -387,13 +405,13 @@ class NtfyClient:
             except Exception: pass
 
     def _monitor_loop(self) -> None:
-        """Avalia monitores image/pixel a cada N segundos."""
+        """Avalia monitores image/pixel/text a cada N segundos."""
         while self._running:
             now = time.time()
             for mon in list(self._monitors):  # cópia: pode ser modificado pela UI
                 if not mon.enabled:
                     continue
-                if mon.trigger_type not in ("image", "pixel"):
+                if mon.trigger_type not in ("image", "pixel", "text"):
                     continue  # event/var são acionados externamente
                 if now - mon._last_fired_t < mon.cooldown_s:
                     continue
@@ -405,14 +423,30 @@ class NtfyClient:
                     pass  # avaliação individual quebrou — segue pros outros
             time.sleep(self.MONITOR_INTERVAL_S)
 
+    def _get_monitor_region(self, mon: Monitor) -> tuple[int, int, int, int] | None:
+        """Retorna (x, y, w, h) da janela alvo, ou None pra tela inteira.
+
+        Se a janela alvo foi fechada (hwnd inválido), retorna None — degrada
+        pra tela inteira em vez de quebrar o monitor silenciosamente.
+        """
+        if not mon.target_hwnd:
+            return None
+        try:
+            return self._driver.get_window_rect(mon.target_hwnd)
+        except Exception:
+            return None
+
     def _evaluate_monitor(self, mon: Monitor) -> bool:
         """True se o trigger do monitor está ativo no momento."""
+        region = self._get_monitor_region(mon)
+
         if mon.trigger_type == "image" and mon.image_data:
             return self._driver.find_image_on_screen(
-                mon.image_data, mon.image_threshold
+                mon.image_data, mon.image_threshold, region=region,
             ) is not None
         if (mon.trigger_type == "pixel" and mon.color_rgb
                 and mon.x is not None and mon.y is not None):
+            # Pixel ignora region (coords são absolutas)
             try:
                 r, g, b = self._driver.get_pixel_color(mon.x, mon.y)
             except Exception:
@@ -421,20 +455,53 @@ class NtfyClient:
             tol = mon.color_tolerance
             return (abs(r - tr) <= tol and abs(g - tg) <= tol
                     and abs(b - tb) <= tol)
+        if mon.trigger_type == "text" and mon.text_to_find:
+            return self._driver.find_text_on_screen(
+                text=mon.text_to_find,
+                region=region,
+                match_mode=mon.text_match_mode,
+                case_sensitive=mon.text_case_sensitive,
+                lang=mon.text_lang or "eng",
+                min_confidence=mon.text_min_confidence,
+            ) is not None
         return False
 
+    def _resolve_message(self, mon: Monitor, label: str = "") -> str:
+        """Texto da notificação: prioriza custom_message; fallback nome/label."""
+        if mon.custom_message.strip():
+            return mon.custom_message.strip()
+        if label:
+            return f"{mon.name}: {label}" if mon.name else label
+        return f"Disparou: {mon.name}" if mon.name else "Disparou"
+
+    def _dispatch_notification(
+        self, mon: Monitor, message: str, *,
+        title: str = "AutoClick Pro — Alerta",
+        priority: int = 4,
+        actions: list[dict] | None = None,
+    ) -> None:
+        """Despacha pra PC (tray) e/ou celular (ntfy) conforme flags do monitor."""
+        if mon.notify_pc and self.on_pc_notify:
+            try:
+                self.on_pc_notify(message, title)
+            except Exception:
+                pass
+        if mon.notify_phone:
+            self.publish(
+                message=message, title=title, priority=priority,
+                attach_screenshot=mon.attach_screenshot,
+                actions=actions,
+            )
+
     def _fire_monitor(self, mon: Monitor) -> None:
-        """Publica notificação do monitor disparado, com botões de ação."""
+        """Dispara notificação do monitor (PC tray + celular conforme flags)."""
         actions = [
             {"label": "Parar Macro", "body": "stop"},
             {"label": "Pausar",      "body": "pause"},
         ]
-        self.publish(
-            message=f"Disparou: {mon.name}",
-            title="AutoClick Pro — Alerta",
-            priority=4,
-            attach_screenshot=mon.attach_screenshot,
-            actions=actions,
+        self._dispatch_notification(
+            mon, self._resolve_message(mon),
+            title="AutoClick Pro — Alerta", priority=4, actions=actions,
         )
 
     def fire_event(self, event_name: str, label: str = "") -> None:
@@ -454,9 +521,10 @@ class NtfyClient:
             if now - mon._last_fired_t < mon.cooldown_s:
                 continue
             mon._last_fired_t = now
-            msg = f"{mon.name}: {label}" if label else mon.name
-            self.publish(message=msg, priority=3,
-                          attach_screenshot=mon.attach_screenshot)
+            self._dispatch_notification(
+                mon, self._resolve_message(mon, label),
+                title="AutoClick Pro — Alerta", priority=3,
+            )
 
     # ─────────────────────────────────────────────────────────────
     # Persistência (atomic write como hotstrings/profiles)

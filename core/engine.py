@@ -782,7 +782,10 @@ class SequentialRunner:
             for _ in range(n):
                 if not self._running:
                     break
-                self._driver.perform_scroll(x, y, dy=step.scroll_dy)
+                self._driver.perform_scroll(
+                    x, y, dy=step.scroll_dy,
+                    smooth=getattr(step, "scroll_smooth", False),
+                )
         elif action == "drag":
             if x is not None and y is not None and step.x2 is not None and step.y2 is not None:
                 x2, y2 = step.x2, step.y2

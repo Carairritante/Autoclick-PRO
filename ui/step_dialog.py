@@ -231,6 +231,8 @@ class StepDialog(tk.Toplevel):
         self._var_text      = tk.StringVar()
         self._var_key       = tk.StringVar(value=step.key if step and step.key else "enter")
         self._var_scroll_dy = tk.StringVar(value=str(step.scroll_dy) if step else "3")
+        self._var_scroll_smooth = tk.BooleanVar(
+            value=bool(getattr(step, "scroll_smooth", False)) if step else False)
         self._var_repeat    = tk.StringVar(value=str(step.repeat) if step else "1")
         self._text_widget: tk.Text | None = None
         # pixel_check
@@ -439,6 +441,12 @@ class StepDialog(tk.Toplevel):
                 tk.Label(f, text="(+ cima / − baixo)", bg=T["bg"], fg=T["subtext"],
                          font=("Segoe UI", 8)).grid(row=3, column=1, columnspan=2, sticky="w")
                 entry(self._var_scroll_dy, 2)
+                tk.Checkbutton(
+                    f, text="Scroll suave (interpola — mais fluido em navegadores/PDF)",
+                    variable=self._var_scroll_smooth,
+                    bg=T["bg"], fg=T["text"], selectcolor=T.get("sel", "#7a1a1a"),
+                    activebackground=T["bg"], font=("Segoe UI", 9)
+                ).grid(row=4, column=0, columnspan=4, sticky="w", pady=(4, 0))
 
         elif action == "type":
             lbl("Texto:", 0)
@@ -1246,6 +1254,7 @@ class StepDialog(tk.Toplevel):
             text=text,
             key=self._var_key.get() if action == "key_press" else None,
             scroll_dy=_int(self._var_scroll_dy, 3),
+            scroll_smooth=bool(self._var_scroll_smooth.get()),
             repeat=repeat,
             color_rgb=color_rgb,
             skip_steps=skip_steps,

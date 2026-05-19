@@ -53,3 +53,6 @@ $RECYCLE.BIN/
 # ─── Logs e temporários ───────────────────────────────────────────
 *.log
 *.tmp
+
+# ─── Scripts de diagnóstico ───────────────────────────────────────
+diagnose.py

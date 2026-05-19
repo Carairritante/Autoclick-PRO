@@ -32,6 +32,7 @@ class MacroStep:
     text: str | None = None
     key: str | None = None
     scroll_dy: int = 3
+    scroll_smooth: bool = False     # quebra em micro-scrolls com sleep entre eles
     repeat: int = 1
     rel_x: float | None = None
     rel_y: float | None = None
