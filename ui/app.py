@@ -39,6 +39,7 @@ from core.paths import HOTSTRINGS_PATH, NTFY_CONFIG_PATH, ONBOARDING_PATH, SCHED
 from core.recorder import MacroRecorder
 from core.macro_schema import MacroStep, StopCondition
 from core.scheduler import SchedulerWorker
+from ui.tabs.ai_assistant import AIAssistantMixin
 from ui.tabs.click import ClickMixin
 from ui.tabs.hotstrings import HotstringTabMixin
 from ui.tabs.keyboard import KeyboardMixin
@@ -64,6 +65,7 @@ class AutoClickPro(
     HotstringTabMixin,
     MonitorMixin,
     SchedulerMixin,
+    AIAssistantMixin,
     SettingsMixin,
     tk.Tk,
 ):
@@ -539,6 +541,7 @@ class AutoClickPro(
         self.tab_hs        = tk.Frame(nb, bg=T["bg"])
         self.tab_monitor   = tk.Frame(nb, bg=T["bg"])
         self.tab_scheduler = tk.Frame(nb, bg=T["bg"])
+        self.tab_ai        = tk.Frame(nb, bg=T["bg"])
         self.tab_cfg       = tk.Frame(nb, bg=T["bg"])
 
         nb.add(self.tab_click,     text="🖱  AutoClick")
@@ -547,6 +550,7 @@ class AutoClickPro(
         nb.add(self.tab_hs,        text="✨  Hotstrings")
         nb.add(self.tab_monitor,   text="📡  Monitoramento")
         nb.add(self.tab_scheduler, text="⏰  Agendador")
+        nb.add(self.tab_ai,        text="🤖  IA Assistente")
         nb.add(self.tab_cfg,       text="⚙  Configurações")
 
         self._build_click_tab()
@@ -555,6 +559,7 @@ class AutoClickPro(
         self._build_hotstrings_tab()
         self._build_monitor_tab()
         self._build_scheduler_tab()
+        self._build_ai_assistant_tab()
         self._build_settings_tab()
 
     # ── Footer (status bar terminal-like) ─────────────────────────

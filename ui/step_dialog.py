@@ -44,6 +44,7 @@ ACTION_LABELS: dict[str, str] = {
     "clipboard_get":  "📋 Clipboard Get",
     "call_macro":     "📞 Chamar Macro",
     "http_request":   "🌐 HTTP Request",
+    "ai_prompt":      "🤖 Prompt IA",
     "if":             "🔀 If (condição)",
     "else":           "↪ Else",
     "endif":          "⏹ EndIf",
@@ -79,6 +80,7 @@ ACTION_DESCRIPTIONS: dict[str, str] = {
     "wait_window":  "Pausa o macro até uma janela com título (parcial) aparecer. Útil pra esperar app abrir.",
     "call_macro":   "Executa outro macro inteiro (slot 1/2/3 ou arquivo .json). Reusa lógica.",
     "http_request": "Chama uma API REST (Discord webhook, Telegram bot, Home Assistant, etc). Salva a resposta numa variável.",
+    "ai_prompt":    "Manda um prompt pra uma IA (Ollama local grátis, ou OpenAI/Groq/OpenRouter). Salva a resposta numa variável. Aceita {variavel} no prompt.",
     "if":           "Inicia bloco condicional. Steps até Else/EndIf rodam só se a condição der true.",
     "else":         "Marca o bloco que roda se o If for falso. Precisa estar entre If e EndIf.",
     "endif":        "Fecha o bloco If/Else.",
@@ -182,6 +184,16 @@ def step_to_params_str(step: MacroStep) -> str:
         if step.var_name:
             extras.append(f"→{{{step.var_name}}}")
         return f"{method} {url}" + (f"  [{' '.join(extras)}]" if extras else "")
+    elif a == "ai_prompt":
+        backend = step.ai_backend or "ollama"
+        model   = step.ai_model or "?"
+        preview = (step.ai_prompt_text or "")[:28]
+        if len(step.ai_prompt_text or "") > 28:
+            preview += "…"
+        out = f"[{backend}/{model}]  \"{preview}\""
+        if step.var_name:
+            out += f"  →{{{step.var_name}}}"
+        return out
     elif a == "if":
         ct = step.cond_type or "var"
         op = step.cond_op or ""
@@ -349,6 +361,21 @@ class StepDialog(tk.Toplevel):
         ))
         self._http_body_widget: tk.Text | None = None
         self._http_headers_widget: tk.Text | None = None
+        # ai_prompt
+        self._var_ai_backend       = tk.StringVar(value=step.ai_backend if step else "ollama")
+        self._var_ai_model         = tk.StringVar(value=step.ai_model if step else "")
+        self._var_ai_prompt_text   = tk.StringVar(value=step.ai_prompt_text if step else "")
+        self._var_ai_system_prompt = tk.StringVar(value=step.ai_system_prompt if step else "")
+        self._var_ai_temperature   = tk.StringVar(value=str(step.ai_temperature) if step else "0.7")
+        self._var_ai_base_url      = tk.StringVar(value=step.ai_base_url if step else "")
+        self._var_ai_api_key       = tk.StringVar(value=step.ai_api_key if step else "")
+        self._var_ai_timeout       = tk.StringVar(value=str(step.ai_timeout_s) if step else "30")
+        self._var_ai_show_advanced = tk.BooleanVar(value=bool(
+            step and step.action == "ai_prompt"
+            and (step.ai_system_prompt or step.ai_api_key or step.ai_base_url)
+        ))
+        self._ai_prompt_widget: tk.Text | None = None
+        self._ai_system_widget: tk.Text | None = None
 
         if step and step.text:
             self._var_text.set(step.text)
@@ -1036,6 +1063,112 @@ class StepDialog(tk.Toplevel):
             entry(self._var_delay, 14)
             return
 
+        if action == "ai_prompt":
+            lbl("Backend:", 0)
+            ttk.Combobox(f, textvariable=self._var_ai_backend,
+                         values=["ollama", "openai", "openrouter", "groq", "custom"],
+                         state="readonly", width=14, font=("Segoe UI", 10)
+                         ).grid(row=0, column=1, sticky="w")
+            self._var_ai_backend.trace_add("write", lambda *_: self._refresh_fields())
+
+            backend = self._var_ai_backend.get() or "ollama"
+
+            lbl("Modelo:", 1)
+            _model_suggestions = {
+                "ollama":     ["llama3.2", "llama3.1", "mistral", "gemma2", "phi3", "qwen2.5"],
+                "openai":     ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
+                "openrouter": ["mistralai/mistral-7b-instruct", "google/gemma-7b-it",
+                               "meta-llama/llama-3-8b-instruct"],
+                "groq":       ["llama3-8b-8192", "llama3-70b-8192", "mixtral-8x7b-32768"],
+                "custom":     [],
+            }
+            if not self._var_ai_model.get():
+                _defaults = {"ollama": "llama3.2", "openai": "gpt-4o-mini",
+                             "openrouter": "mistralai/mistral-7b-instruct",
+                             "groq": "llama3-8b-8192", "custom": ""}
+                self._var_ai_model.set(_defaults.get(backend, ""))
+            ttk.Combobox(f, textvariable=self._var_ai_model,
+                         values=_model_suggestions.get(backend, []),
+                         width=30, font=("Consolas", 10)
+                         ).grid(row=1, column=1, columnspan=2, sticky="w")
+
+            lbl("Prompt:", 2)
+            prompt_text = tk.Text(f, height=5, width=44, bg=T["card"], fg=T["text"],
+                                  insertbackground=T["text"], font=("Consolas", 10),
+                                  relief="flat", padx=6, pady=4, wrap="word")
+            prompt_text.grid(row=2, column=1, columnspan=3, sticky="we", pady=2)
+            if self._var_ai_prompt_text.get():
+                prompt_text.insert("1.0", self._var_ai_prompt_text.get())
+            self._ai_prompt_widget = prompt_text
+            tk.Label(f, text='Aceita {variavel}. Ex: "Traduza pro ingles: {texto}"',
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                     ).grid(row=3, column=1, columnspan=3, sticky="w")
+
+            lbl("Salvar resposta em var:", 4)
+            tk.Entry(f, textvariable=self._var_var_name, width=20, bg=T["card"],
+                     fg=T["text"], insertbackground=T["text"], font=("Consolas", 11),
+                     relief="flat", bd=4).grid(row=4, column=1, sticky="w")
+
+            tk.Checkbutton(f, text="🔧 Avancado (system prompt, temperatura, API key, URL base)",
+                           variable=self._var_ai_show_advanced,
+                           command=self._refresh_fields,
+                           bg=T["bg"], fg=T["text"], selectcolor=T.get("sel", "#7a1a1a"),
+                           activebackground=T["bg"], font=("Segoe UI", 9)
+                           ).grid(row=5, column=0, columnspan=4, sticky="w", pady=(8, 4))
+
+            if self._var_ai_show_advanced.get():
+                lbl("System prompt:", 6)
+                sys_text = tk.Text(f, height=3, width=44, bg=T["card"], fg=T["text"],
+                                   insertbackground=T["text"], font=("Consolas", 10),
+                                   relief="flat", padx=6, pady=4, wrap="word")
+                sys_text.grid(row=6, column=1, columnspan=3, sticky="we", pady=2)
+                if self._var_ai_system_prompt.get():
+                    sys_text.insert("1.0", self._var_ai_system_prompt.get())
+                self._ai_system_widget = sys_text
+                tk.Label(f, text='Ex: "Responda sempre em portugues em no maximo 1 frase."',
+                         bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                         ).grid(row=7, column=1, columnspan=3, sticky="w")
+
+                lbl("Temperatura:", 8)
+                tk.Spinbox(f, textvariable=self._var_ai_temperature, from_=0.0, to=2.0,
+                           increment=0.1, width=5, bg=T["card"], fg=T["text"],
+                           relief="flat", font=("Consolas", 10), format="%.1f"
+                           ).grid(row=8, column=1, sticky="w")
+                tk.Label(f, text="0=determinístico  1=criativo  (Ollama ignora este campo)",
+                         bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                         ).grid(row=8, column=2, columnspan=2, sticky="w", padx=8)
+
+                if backend != "ollama":
+                    lbl("API Key:", 9)
+                    tk.Entry(f, textvariable=self._var_ai_api_key, width=38,
+                             bg=T["card"], fg=T["text"], insertbackground=T["text"],
+                             font=("Consolas", 10), relief="flat", bd=4, show="•"
+                             ).grid(row=9, column=1, columnspan=2, sticky="w")
+                    tk.Label(f, text="Salva em texto plano no slot/arquivo. Nao e password manager.",
+                             bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                             ).grid(row=10, column=1, columnspan=3, sticky="w")
+
+                if backend in ("ollama", "custom"):
+                    lbl("URL base:", 11)
+                    tk.Entry(f, textvariable=self._var_ai_base_url, width=38,
+                             bg=T["card"], fg=T["text"], insertbackground=T["text"],
+                             font=("Consolas", 10), relief="flat", bd=4
+                             ).grid(row=11, column=1, columnspan=2, sticky="w")
+                    _placeholder = ("http://localhost:11434" if backend == "ollama"
+                                    else "https://sua-api.com/v1")
+                    tk.Label(f, text=f"Padrao: {_placeholder}",
+                             bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                             ).grid(row=12, column=1, columnspan=3, sticky="w")
+
+                lbl("Timeout (s):", 13)
+                tk.Spinbox(f, textvariable=self._var_ai_timeout, from_=5, to=300,
+                           width=5, bg=T["card"], fg=T["text"], relief="flat",
+                           font=("Consolas", 10)).grid(row=13, column=1, sticky="w")
+
+            lbl("Delay pre-step (ms):", 15)
+            entry(self._var_delay, 15)
+            return
+
         if action == "set_var":
             lbl("Variável:", 0)
             tk.Entry(f, textvariable=self._var_var_name, width=20, bg=T["card"],
@@ -1631,6 +1764,31 @@ class StepDialog(tk.Toplevel):
             call_target_kind = self._var_call_kind.get() or "slot"
             call_target = self._var_call_target.get().strip()
 
+        # ai_prompt — backend/model/prompts/temperature/key/url/timeout
+        ai_backend       = "ollama"
+        ai_model         = ""
+        ai_prompt_text   = ""
+        ai_system_prompt = ""
+        ai_temperature   = 0.7
+        ai_base_url      = ""
+        ai_api_key       = ""
+        ai_timeout_s     = 30
+        if action == "ai_prompt":
+            ai_backend   = self._var_ai_backend.get() or "ollama"
+            ai_model     = self._var_ai_model.get().strip()
+            ai_prompt_text = (self._ai_prompt_widget.get("1.0", "end-1c")
+                              if self._ai_prompt_widget else self._var_ai_prompt_text.get())
+            ai_system_prompt = (self._ai_system_widget.get("1.0", "end-1c")
+                                if self._ai_system_widget else self._var_ai_system_prompt.get())
+            try:
+                ai_temperature = max(0.0, min(2.0, float(self._var_ai_temperature.get() or "0.7")))
+            except ValueError:
+                ai_temperature = 0.7
+            ai_base_url  = self._var_ai_base_url.get().strip()
+            ai_api_key   = self._var_ai_api_key.get()
+            ai_timeout_s = max(5, _int(self._var_ai_timeout, 30))
+            var_name     = self._var_var_name.get().strip()
+
         # http_request — URL/método/body/headers/auth/timeout + var_name pra resposta
         http_url = ""
         http_method = "POST"
@@ -1712,6 +1870,14 @@ class StepDialog(tk.Toplevel):
             http_auth_value=http_auth_value,
             http_timeout_s=http_timeout_s,
             http_save_status_var=http_save_status_var,
+            ai_backend=ai_backend,
+            ai_model=ai_model,
+            ai_prompt_text=ai_prompt_text,
+            ai_system_prompt=ai_system_prompt,
+            ai_temperature=ai_temperature,
+            ai_base_url=ai_base_url,
+            ai_api_key=ai_api_key,
+            ai_timeout_s=ai_timeout_s,
         )
         self.destroy()
 

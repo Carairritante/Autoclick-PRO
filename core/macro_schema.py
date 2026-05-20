@@ -90,6 +90,15 @@ class MacroStep:
     http_auth_value: str = ""          # token (bearer) ou "user:pass" (basic)
     http_timeout_s: int = 10
     http_save_status_var: str = ""     # opcional — salva status HTTP (200, 404, -1=erro)
+    # ai_prompt — envia prompt a LLM local (Ollama) ou API compatível. var_name salva a resposta.
+    ai_backend: str = "ollama"         # "ollama" | "openai" | "openrouter" | "groq" | "custom"
+    ai_model: str = ""                 # ex: "llama3.2", "gpt-4o-mini", "mixtral-8x7b-32768"
+    ai_prompt_text: str = ""           # prompt de usuário; aceita {variavel}
+    ai_system_prompt: str = ""         # system prompt (opcional)
+    ai_temperature: float = 0.7        # 0=determinístico, 1=criativo (ignorado pelo Ollama)
+    ai_base_url: str = ""              # URL base custom (Ollama: http://localhost:11434)
+    ai_api_key: str = ""               # API key (vazio pra Ollama local)
+    ai_timeout_s: int = 30             # timeout em segundos
 
 
 @dataclass

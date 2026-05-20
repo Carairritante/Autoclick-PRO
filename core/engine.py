@@ -1002,6 +1002,8 @@ class SequentialRunner:
                     time.sleep(0.3)
         elif action == "http_request":
             self._do_http_request(step, ctx)
+        elif action == "ai_prompt":
+            self._do_ai_prompt(step, ctx)
         elif action == "set_var":
             if step.var_name:
                 resolved = self._resolve_var_value(step.var_value, ctx)
@@ -1093,6 +1095,42 @@ class SequentialRunner:
             if step.http_save_status_var:
                 ctx.variables[step.http_save_status_var] = -1
                 self._notify_var(step.http_save_status_var, -1)
+
+    # ── Helper para ai_prompt ────────────────────────────────────────────────
+    def _do_ai_prompt(self, step, ctx: MacroContext) -> None:
+        """Envia prompt a uma LLM (Ollama local ou API OpenAI-compatível).
+
+        Interpola {var} no prompt e system prompt. Salva resposta em var_name.
+        Em erro, salva "[ERRO: ...]" na variável — não para o macro.
+        Lógica HTTP centralizada em core.ai_client.call_llm.
+        """
+        prompt = self._resolve_var_value(step.ai_prompt_text or "", ctx)
+        if not prompt:
+            return
+
+        system = self._resolve_var_value(step.ai_system_prompt or "", ctx)
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        from core.ai_client import call_llm
+        backend = step.ai_backend or "ollama"
+        success, text = call_llm(
+            backend=backend,
+            model=step.ai_model or ("llama3.2" if backend == "ollama" else ""),
+            messages=messages,
+            api_key=self._resolve_var_value(step.ai_api_key or "", ctx),
+            base_url=step.ai_base_url or "",
+            timeout_s=step.ai_timeout_s or 30,
+            temperature=step.ai_temperature,
+        )
+
+        if step.var_name:
+            # Sucesso: strip; falha: já vem formatado como "[ERRO: ...]"
+            out = text.strip() if success else text
+            ctx.variables[step.var_name] = out
+            self._notify_var(step.var_name, out)
 
     # ── Helpers para call_macro ──────────────────────────────────────────────
     def _resolve_macro_target(self, kind: str, target: str) -> str | None:
