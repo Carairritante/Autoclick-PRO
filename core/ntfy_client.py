@@ -335,7 +335,8 @@ class NtfyClient:
             return
         backoff = self.RECONNECT_BACKOFF_INITIAL_S
         while self._running:
-            connect_t = time.time()
+            # monotonic: backoff reset baseado em tempo real decorrido, imune a NTP/DST
+            connect_t = time.monotonic()
             try:
                 self._sub_session = requests.Session()
                 with self._sub_session.get(
@@ -361,7 +362,7 @@ class NtfyClient:
             except Exception:
                 pass  # rede caiu, timeout, etc — reconecta
             # Conexão que sobreviveu > 5s = rede estava OK, reseta backoff
-            if time.time() - connect_t > 5.0:
+            if time.monotonic() - connect_t > 5.0:
                 backoff = self.RECONNECT_BACKOFF_INITIAL_S
             if self._running:
                 time.sleep(backoff)
@@ -407,7 +408,8 @@ class NtfyClient:
     def _monitor_loop(self) -> None:
         """Avalia monitores image/pixel/text a cada N segundos."""
         while self._running:
-            now = time.time()
+            # monotonic: cooldown imune a mudanças do relógio do sistema
+            now = time.monotonic()
             for mon in list(self._monitors):  # cópia: pode ser modificado pela UI
                 if not mon.enabled:
                     continue
@@ -512,7 +514,8 @@ class NtfyClient:
         """
         if not self._running:
             return
-        now = time.time()
+        # monotonic: consistente com _monitor_loop (mesma base de tempo nos _last_fired_t)
+        now = time.monotonic()
         for mon in list(self._monitors):
             if (mon.trigger_type != "event"
                     or mon.event_name != event_name

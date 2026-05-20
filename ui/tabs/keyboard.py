@@ -14,6 +14,7 @@ import tkinter as tk
 from tkinter import filedialog
 
 from ui.theme import T
+from ui.widgets import Tooltip
 
 
 class KeyboardMixin:
@@ -130,10 +131,14 @@ class KeyboardMixin:
                                   activebackground=T["accent_h"],
                                   bd=0, highlightthickness=0)
         self.key_btn.pack(fill="x", padx=8, pady=(10, 10))
-        self.key_btn.bind("<Enter>", lambda e: self.key_btn.config(
-            bg=T["red_h"] if self._type_running else T["accent_h"]))
-        self.key_btn.bind("<Leave>", lambda e: self.key_btn.config(
-            bg=T["red"] if self._type_running else T["accent"]))
+        self.key_btn.bind("<Enter>", lambda e: self._btn_anim_hover(
+            self.key_btn, T["red_h"] if self._type_running else T["accent_h"]))
+        self.key_btn.bind("<Leave>", lambda e: self._btn_anim_hover(
+            self.key_btn, T["red"] if self._type_running else T["accent"]))
+        Tooltip(self.key_btn,
+                get_text=lambda e: f"Atalho: {self.var_hk_key.get().upper()}  •  "
+                                   "Configurável em ⚙ Configurações",
+                delay_ms=700)
 
     # ─────────────────────────────────────────────────────────────
     # AUTO KEYBOARD — LÓGICA
@@ -214,6 +219,7 @@ class KeyboardMixin:
         self.key_btn_var.set("⏹  STOP AUTOKEYBOARD   F7")
         self._set_pill(self._pill_key, True, T["green"])
         self._start_pulse(self.key_btn)
+        self._run_indicator_start()
         type_loop.start()
 
     def _stop_typing(self) -> None:
@@ -223,4 +229,6 @@ class KeyboardMixin:
         self.key_btn.config(bg=T["accent"], fg="#ffffff")
         self.key_btn_var.set("▶  START AUTOKEYBOARD   F7")
         self._set_pill(self._pill_key, False)
+        if not self._click_running and not self._macro_running:
+            self._run_indicator_stop()
         self._set_status("⏹  autokeyboard parado.")

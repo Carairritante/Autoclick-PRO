@@ -18,9 +18,10 @@ from tkinter import messagebox
 CAT_GAMES   = "🎮 Jogos"
 CAT_WORK    = "💼 Trabalho"
 CAT_ACCESS  = "♿ Acessibilidade"
+CAT_INTEG   = "🔌 Integrações"
 CAT_HS      = "✨ Hotstrings"
 # Ordem em que aparecem no notebook
-CATEGORIES_ORDER = [CAT_GAMES, CAT_WORK, CAT_ACCESS, CAT_HS]
+CATEGORIES_ORDER = [CAT_GAMES, CAT_WORK, CAT_ACCESS, CAT_INTEG, CAT_HS]
 
 
 @dataclass
@@ -118,6 +119,168 @@ TEMPLATES: list[Template] = [
             "macro_steps": [
                 {"action": "key_press", "key": "space", "delay_ms": 0},
                 {"action": "wait", "delay_ms": 60000},
+            ],
+            "macro_speed": "1",
+            "rep_mode": "infinite",
+        },
+    ),
+    Template(
+        id="gpo_fishing_auto_tap",
+        name="Pesca GPO — Auto Tap",
+        category=CAT_GAMES,
+        icon="🎣",
+        description=(
+            "Loop completo de pesca no Grand Piece Online: lança a vara, "
+            "aguarda mordida e rola no minigame com tap rápido em E."
+        ),
+        type="macro",
+        warning=(
+            "Antes de iniciar: equipe a vara, posicione o personagem perto da água "
+            "e clique no jogo.\n"
+            "Tecla de interação: E (padrão). Se usar outra, edite todos os key_press.\n"
+            "Ajuste o 'wait 9000ms' se o peixe demorar mais/menos pra morder.\n"
+            "Macros no Roblox violam os Termos de Servico — use por sua conta e risco."
+        ),
+        config={
+            "macro_steps": [
+                # ── Lanca a vara (E) ─────────────────────────────
+                {"action": "key_press", "key": "e", "delay_ms": 500},
+                # ── Aguarda mordida (media 5-12s no GPO) ─────────
+                {"action": "wait", "delay_ms": 9000},
+                # ── Minigame de recolher ──────────────────────────
+                # 28 taps rapidos em E com 100ms de intervalo cada.
+                # Cada tap faz o marcador reagir; oscilacao continua
+                # mantem o peixe dentro da zona azul durante ~3s.
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                {"action": "key_press", "key": "e", "delay_ms": 100},
+                # ── Aguarda animacao de loot ──────────────────────
+                {"action": "wait", "delay_ms": 2000},
+                # ── Fecha loot / inicia proxima pescada ──────────
+                {"action": "key_press", "key": "e", "delay_ms": 300},
+            ],
+            "macro_speed": "1",
+            "rep_mode": "infinite",
+        },
+    ),
+    Template(
+        id="naramo_manutencao_usina",
+        name="Naramo — Manutencao Usina",
+        category=CAT_GAMES,
+        icon="⚛",
+        description=(
+            "Automatiza o ciclo de manutencao na usina nuclear do Naramo: "
+            "repara maquinas quebradas (minigame E/Q) e aguarda proximo defeito."
+        ),
+        type="macro",
+        warning=(
+            "Funcao: Tecnico de Manutencao (Plant Maintenance).\n"
+            "Use o gravador (F10) pra capturar o click na maquina quebrada — "
+            "substitua os placeholders x=960, y=600.\n"
+            "O minigame alterna E e Q; cada par repara 25HP. "
+            "Maquinas tem 100HP, entao 4 pares = reparo completo.\n"
+            "Ajuste o 'wait 120000ms' (2 min) para o intervalo de break real do servidor."
+        ),
+        config={
+            "macro_steps": [
+                # ── Ir ate a maquina quebrada ─────────────────────
+                # Substitua x/y pelo clique real na maquina defeituosa
+                {"action": "click", "x": 960, "y": 600,
+                 "button": "left", "delay_ms": 500},
+                # ── Aguarda UI de reparo abrir ─────────────────────
+                {"action": "wait", "delay_ms": 800},
+                # ── Minigame de reparo: alterna E e Q ────────────
+                # Cada par (E+Q) repara 25HP. 6 pares = margem de
+                # seguranca para maquinas com HP parcial.
+                {"action": "key_press", "key": "e", "delay_ms": 150},
+                {"action": "key_press", "key": "q", "delay_ms": 150},
+                {"action": "key_press", "key": "e", "delay_ms": 150},
+                {"action": "key_press", "key": "q", "delay_ms": 150},
+                {"action": "key_press", "key": "e", "delay_ms": 150},
+                {"action": "key_press", "key": "q", "delay_ms": 150},
+                {"action": "key_press", "key": "e", "delay_ms": 150},
+                {"action": "key_press", "key": "q", "delay_ms": 150},
+                {"action": "key_press", "key": "e", "delay_ms": 150},
+                {"action": "key_press", "key": "q", "delay_ms": 150},
+                {"action": "key_press", "key": "e", "delay_ms": 150},
+                {"action": "key_press", "key": "q", "delay_ms": 150},
+                # ── Aguarda animacao de reparo finalizar ──────────
+                {"action": "wait", "delay_ms": 1500},
+                # ── Verifica segunda maquina (opcional) ──────────
+                # Descomente / edite se houver outra maquina no circuito
+                # {"action": "click", "x": 800, "y": 500,
+                #  "button": "left", "delay_ms": 400},
+                # ── Aguarda proximo defeito (ajuste conforme o servidor)
+                {"action": "wait", "delay_ms": 120000},
+            ],
+            "macro_speed": "1",
+            "rep_mode": "infinite",
+        },
+    ),
+    Template(
+        id="naramo_reator_estabilizar",
+        name="Naramo — Estabilizar Reator",
+        category=CAT_GAMES,
+        icon="🔧",
+        description=(
+            "Tecnico de Reator: mantém os controles na posicao correta "
+            "(varetas 55%, bomba refrigerante ON) a cada 3 minutos."
+        ),
+        type="macro",
+        warning=(
+            "Funcao: Reactor Operations (Tecnico de Reator).\n"
+            "Use o gravador (F10) para capturar os cliques reais nos controles "
+            "da sala de controle — substitua os placeholders x/y.\n"
+            "Parametros alvo: varetas 55%, bomba refrigerante ON, "
+            "nivel de agua feedwater 100%.\n"
+            "NAO execute se outro tecnico ja estiver operando o reator."
+        ),
+        config={
+            "macro_steps": [
+                # ── Ajustar varetas de controle ───────────────────
+                # Clique no controle de insercao de varetas (rod insertion)
+                # Substitua x/y pelo botao real na sua tela
+                {"action": "click", "x": 850, "y": 450,
+                 "button": "left", "delay_ms": 400},
+                {"action": "wait", "delay_ms": 600},
+                # ── Verificar bomba de refrigerante ──────────────
+                # Clique no toggle da bomba de coolant
+                {"action": "click", "x": 780, "y": 500,
+                 "button": "left", "delay_ms": 400},
+                {"action": "wait", "delay_ms": 400},
+                # ── Verificar valvula feedwater ────────────────────
+                {"action": "click", "x": 920, "y": 500,
+                 "button": "left", "delay_ms": 400},
+                {"action": "wait", "delay_ms": 600},
+                # ── Confirmar / fechar menu se abriu ──────────────
+                {"action": "key_press", "key": "escape", "delay_ms": 200},
+                # ── Aguarda proximo ciclo de verificacao (3 min) ──
+                {"action": "wait", "delay_ms": 180000},
             ],
             "macro_speed": "1",
             "rep_mode": "infinite",
@@ -259,6 +422,77 @@ TEMPLATES: list[Template] = [
         },
     ),
 
+    # ═══ INTEGRAÇÕES (usam o step http_request) ══════════════════
+    Template(
+        id="discord_webhook_notify",
+        name="Notificar Discord (Webhook)",
+        category=CAT_INTEG,
+        icon="💬",
+        description="Manda 'Olá do AutoClick!' num canal do Discord via webhook. Edite a URL com seu webhook.",
+        type="macro",
+        warning="Cole a URL do seu webhook Discord no step (Config do canal → Integrações → Webhooks).",
+        config={
+            "macro_steps": [
+                {"action": "http_request",
+                 "http_url": "https://discord.com/api/webhooks/SEU/WEBHOOK_AQUI",
+                 "http_method": "POST",
+                 "http_body": '{"content": "Olá do AutoClick Pro! 🤖"}',
+                 "delay_ms": 0},
+            ],
+            "macro_speed": "1",
+            "rep_mode": "count",
+            "rep_count": "1",
+        },
+    ),
+    Template(
+        id="telegram_bot_notify",
+        name="Notificar Telegram (Bot)",
+        category=CAT_INTEG,
+        icon="✈",
+        description="Manda mensagem via bot do Telegram. Precisa de bot token (@BotFather) e chat_id.",
+        type="macro",
+        warning="Substitua BOT_TOKEN e CHAT_ID na URL. Crie bot em @BotFather no Telegram.",
+        config={
+            "macro_steps": [
+                {"action": "http_request",
+                 "http_url": "https://api.telegram.org/botBOT_TOKEN/sendMessage",
+                 "http_method": "POST",
+                 "http_body": '{"chat_id": "CHAT_ID", "text": "Olá do AutoClick Pro!"}',
+                 "delay_ms": 0},
+            ],
+            "macro_speed": "1",
+            "rep_mode": "count",
+            "rep_count": "1",
+        },
+    ),
+    Template(
+        id="alert_when_text_appears",
+        name="Alerta: texto na tela → Discord",
+        category=CAT_INTEG,
+        icon="🚨",
+        description="Vigia a tela toda. Quando 'GAME OVER' aparece (OCR), avisa no Discord. Edite o texto e URL.",
+        type="macro",
+        warning="Loop infinito + OCR a cada 2s. Edite o trigger 'GAME OVER' e a URL do webhook. Precisa do Tesseract OCR instalado.",
+        config={
+            "macro_steps": [
+                {"action": "click_text",
+                 "text_to_find": "GAME OVER",
+                 "text_match_mode": "contains",
+                 "text_use_region": False,
+                 "text_skip_steps": 1,
+                 "delay_ms": 0},
+                {"action": "http_request",
+                 "http_url": "https://discord.com/api/webhooks/SEU/WEBHOOK",
+                 "http_method": "POST",
+                 "http_body": '{"content": "🚨 Texto detectado na tela!"}',
+                 "delay_ms": 0},
+                {"action": "wait", "delay_ms": 2000},
+            ],
+            "macro_speed": "1",
+            "rep_mode": "infinite",
+        },
+    ),
+
     # ═══ HOTSTRINGS RÁPIDAS ══════════════════════════════════════
     Template(
         id="hs_oi",
@@ -353,7 +587,7 @@ def apply_template(app, tpl: Template) -> bool:
     if tpl.type == "autoclick":
         _set_vars(app, tpl.config)
         app._nb.select(app.tab_click)
-        app._set_status(f"📚 Template carregado: {tpl.name}")
+        app._set_status(f"📚 Template carregado: {tpl.name}", toast=True)
         return True
 
     if tpl.type == "autokey":
@@ -363,7 +597,7 @@ def apply_template(app, tpl: Template) -> bool:
         rest = {k: v for k, v in tpl.config.items() if k != "type_text"}
         _set_vars(app, rest)
         app._nb.select(app.tab_key)
-        app._set_status(f"📚 Template carregado: {tpl.name}")
+        app._set_status(f"📚 Template carregado: {tpl.name}", toast=True)
         return True
 
     if tpl.type == "macro":
@@ -379,7 +613,7 @@ def apply_template(app, tpl: Template) -> bool:
         script = MacroScript(**tpl.config)
         app._apply_script(script)
         app._nb.select(app.tab_macro)
-        app._set_status(f"📚 Template carregado: {tpl.name}")
+        app._set_status(f"📚 Template carregado: {tpl.name}", toast=True)
         return True
 
     if tpl.type == "hotstring":
@@ -396,7 +630,7 @@ def apply_template(app, tpl: Template) -> bool:
         app._save_hotstrings()
         app._refresh_hs_tree()
         app._nb.select(app.tab_hs)
-        app._set_status(f"📚 Hotstring '{tpl.config.get('trigger')}' adicionada.")
+        app._set_status(f"📚 Hotstring '{tpl.config.get('trigger')}' adicionada.", toast=True)
         return True
 
     return False

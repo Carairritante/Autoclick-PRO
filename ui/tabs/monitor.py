@@ -102,13 +102,23 @@ class MonitorMixin:
         self._ntfy_cmd_vars: dict[str, tk.BooleanVar] = {}
         allowed = self._ntfy.get_allowed_cmds()
         cmd_specs = [
-            ("stop",   "/stop",   "Parar macro/loop"),
-            ("pause",  "/pause",  "Pausar macro"),
-            ("resume", "/resume", "Retomar macro pausado"),
-            ("run",    "/run",    "Rodar macro atual (ou /run 1 / nome)"),
-            ("status", "/status", "Receber status atual"),
-            ("screen", "/screen", "Receber screenshot da tela"),
-            ("help",   "/help",   "Listar comandos disponíveis"),
+            ("stop",     "/stop",          "Parar macro/loop"),
+            ("pause",    "/pause",         "Pausar macro"),
+            ("resume",   "/resume",        "Retomar macro pausado"),
+            ("run",      "/run",           "Rodar macro atual (ou /run 1 / nome)"),
+            ("status",   "/status",        "Receber status atual"),
+            ("screen",   "/screen",        "Receber screenshot da tela"),
+            ("help",     "/help",          "Listar comandos disponíveis"),
+            # ── Sistema (controle remoto) ──
+            ("shutdown", "/shutdown [N]",  "⚠ Desligar PC em N segundos (default 30)"),
+            ("abort",    "/abort",         "Cancelar shutdown agendado"),
+            ("sleep",    "/sleep",         "⚠ Suspender PC"),
+            ("lock",     "/lock",          "Bloquear tela do PC"),
+            ("volume",   "/volume N",      "Controlar volume (0-100 / up / down / mute)"),
+            ("launch",   "/launch <app>",  "Abrir app (chrome, notepad, roblox, etc)"),
+            ("window",   "/window <nome>", "Trazer janela pra frente"),
+            ("type",     "/type <texto>",  "⚠ Digitar texto na janela ativa"),
+            ("click",    "/click X Y",     "⚠ Clicar em coordenada da tela"),
         ]
         for i, (cmd, label, desc) in enumerate(cmd_specs):
             var = tk.BooleanVar(value=cmd in allowed)
@@ -378,6 +388,50 @@ class MonitorMixin:
                 self._ntfy.publish(f"📊 Status: {msg}", priority=2)
             elif cmd == "screen":
                 self._ntfy.publish("📸 Screen", attach_screenshot=True, priority=2)
+            elif cmd == "shutdown":
+                delay_s = 30
+                if arg.strip():
+                    try: delay_s = max(0, int(arg.strip()))
+                    except ValueError: pass
+                import subprocess
+                subprocess.Popen(["shutdown", "/s", "/t", str(delay_s)],
+                                 creationflags=0x08000000)  # CREATE_NO_WINDOW
+                self._ntfy.publish(f"⏻ Desligando em {delay_s}s. Cancele com /abort.", priority=4)
+            elif cmd == "abort":
+                import subprocess
+                subprocess.Popen(["shutdown", "/a"], creationflags=0x08000000)
+                self._ntfy.publish("✅ Shutdown cancelado.", priority=2)
+            elif cmd == "sleep":
+                import subprocess
+                subprocess.Popen(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"],
+                                 creationflags=0x08000000)
+                self._ntfy.publish("😴 Suspendendo PC...", priority=3)
+            elif cmd == "lock":
+                import subprocess
+                subprocess.Popen(["rundll32.exe", "user32.dll,LockWorkStation"],
+                                 creationflags=0x08000000)
+                self._ntfy.publish("🔒 PC bloqueado.", priority=2)
+            elif cmd == "volume":
+                self._ntfy_set_volume(arg)
+            elif cmd == "launch":
+                self._ntfy_launch_app(arg)
+            elif cmd == "window":
+                self._ntfy_focus_window(arg)
+            elif cmd == "type":
+                if arg:
+                    # paste_text usa clipboard + Ctrl+V — instantâneo e robusto
+                    self._driver.paste_text(arg)
+                    snippet = arg[:30] + ("…" if len(arg) > 30 else "")
+                    self._ntfy.publish(f"⌨ Digitado: {snippet}", priority=2)
+            elif cmd == "click":
+                parts = arg.split()
+                if len(parts) >= 2:
+                    try:
+                        x, y = int(parts[0]), int(parts[1])
+                        self._driver.perform_click(x, y)
+                        self._ntfy.publish(f"🖱 Click em ({x},{y})", priority=2)
+                    except ValueError:
+                        self._ntfy.publish("❌ Uso: /click X Y (inteiros)", priority=3)
             elif cmd == "help":
                 self._ntfy_send_help()
             self._set_status(f"📱 Comando recebido: /{cmd}" + (f" {arg}" if arg else ""))
@@ -390,13 +444,22 @@ class MonitorMixin:
         allowed = self._ntfy.get_allowed_cmds()
         lines = ["📋 Comandos disponíveis:"]
         descs = [
-            ("run",    "/run [N|nome]  iniciar macro (atual / slot N / por nome)"),
-            ("stop",   "/stop          parar tudo"),
-            ("pause",  "/pause         pausar macro"),
-            ("resume", "/resume        retomar pausa"),
-            ("status", "/status        ver estado atual"),
-            ("screen", "/screen        receber screenshot"),
-            ("help",   "/help          esta lista"),
+            ("run",      "/run [N|nome]   iniciar macro (atual / slot N / por nome)"),
+            ("stop",     "/stop           parar tudo"),
+            ("pause",    "/pause          pausar macro"),
+            ("resume",   "/resume         retomar pausa"),
+            ("status",   "/status         ver estado atual"),
+            ("screen",   "/screen         receber screenshot"),
+            ("shutdown", "/shutdown [N]   desligar PC em N segundos"),
+            ("abort",    "/abort          cancelar shutdown agendado"),
+            ("sleep",    "/sleep          suspender PC"),
+            ("lock",     "/lock           bloquear tela"),
+            ("volume",   "/volume N       0-100, up, down ou mute"),
+            ("launch",   "/launch <app>   abrir app (chrome, notepad…)"),
+            ("window",   "/window <nome>  trazer janela pra frente"),
+            ("type",     "/type <texto>   digitar texto na janela ativa"),
+            ("click",    "/click X Y      clicar em coordenada"),
+            ("help",     "/help           esta lista"),
         ]
         for key, line in descs:
             if key in allowed:
@@ -453,6 +516,88 @@ class MonitorMixin:
             self._ntfy.publish(
                 f"⚠ Carreguei '{name}' mas não consegui iniciar (slot vazio?)",
                 priority=3)
+
+    # ── Helpers de comandos de sistema do ntfy ───────────────────
+    def _ntfy_set_volume(self, arg: str) -> None:
+        """Controla volume via teclas de mídia (universal, sem deps extras)."""
+        arg = (arg or "").strip().lower()
+        import keyboard
+        if arg == "mute":
+            keyboard.send("volume mute")
+            self._ntfy.publish("🔇 Mute toggled.", priority=2)
+            return
+        if arg in ("up", "+"):
+            for _ in range(5): keyboard.send("volume up")
+            self._ntfy.publish("🔊 +10%", priority=2)
+            return
+        if arg in ("down", "-"):
+            for _ in range(5): keyboard.send("volume down")
+            self._ntfy.publish("🔉 -10%", priority=2)
+            return
+        try:
+            target = max(0, min(100, int(arg)))
+            # Zera (50 down) e sobe N/2 vezes — cada tap = ~2%
+            for _ in range(50): keyboard.send("volume down")
+            for _ in range(target // 2): keyboard.send("volume up")
+            self._ntfy.publish(f"🔊 Volume ~{target}%", priority=2)
+        except ValueError:
+            self._ntfy.publish("❌ Uso: /volume <0-100|up|down|mute>", priority=3)
+
+    def _ntfy_launch_app(self, alias: str) -> None:
+        """Abre app por alias. Defaults cobrem 10 apps comuns; pode estender
+        em profiles/launch_aliases.json."""
+        import subprocess
+        import json as _json
+        import os
+        defaults = {
+            "chrome":     "start chrome",
+            "edge":       "start msedge",
+            "firefox":    "start firefox",
+            "notepad":    "notepad.exe",
+            "calculator": "calc.exe",
+            "explorer":   "explorer.exe",
+            "discord":    "start discord:",
+            "spotify":    "start spotify:",
+            "steam":      "start steam:",
+            "roblox":     "start roblox-player:1",
+        }
+        try:
+            from core.paths import PROFILES_DIR
+            path = os.path.join(PROFILES_DIR, "launch_aliases.json")
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    extra = _json.load(f)
+                if isinstance(extra, dict):
+                    defaults.update({str(k): str(v) for k, v in extra.items()})
+        except Exception:
+            pass
+        cmd = defaults.get((alias or "").strip().lower())
+        if not cmd:
+            avail = ", ".join(sorted(defaults.keys()))
+            self._ntfy.publish(f"❌ '{alias}' não mapeado.\nDisponíveis: {avail}", priority=3)
+            return
+        try:
+            subprocess.Popen(cmd, shell=True, creationflags=0x08000000)
+            self._ntfy.publish(f"🚀 Abrindo {alias}", priority=2)
+        except Exception as exc:
+            self._ntfy.publish(f"❌ Falhou: {exc}", priority=3)
+
+    def _ntfy_focus_window(self, title_substr: str) -> None:
+        """Traz pra frente a 1a janela cujo título contém substring (case-insensitive)."""
+        if not (title_substr or "").strip():
+            self._ntfy.publish("❌ Uso: /window <parte do título>", priority=3)
+            return
+        from ui.window_picker import list_visible_windows
+        import ctypes
+        needle = title_substr.lower().strip()
+        for hwnd, title in list_visible_windows():
+            if needle in title.lower():
+                user32 = ctypes.windll.user32
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                user32.SetForegroundWindow(hwnd)
+                self._ntfy.publish(f"🪟 Foco: {title[:40]}", priority=2)
+                return
+        self._ntfy.publish(f"❌ Janela '{title_substr}' não encontrada.", priority=3)
 
     # ── CRUD de monitores (acionado pelos botões da aba) ─────────
     def _mon_add(self) -> None:

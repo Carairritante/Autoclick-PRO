@@ -41,6 +41,35 @@ from ui.widgets import Tooltip
 
 
 class MacroMixin:
+    _UNDO_MAX = 50
+
+    # ─────────────────────────────────────────────────────────────
+    # UNDO
+    # ─────────────────────────────────────────────────────────────
+    def _macro_push_undo(self) -> None:
+        """Salva snapshot de _macro_steps na pilha de undo."""
+        stack = getattr(self, "_undo_stack", None)
+        if stack is None:
+            return
+        stack.append(copy.deepcopy(self._macro_steps))
+        if len(stack) > self._UNDO_MAX:
+            stack.pop(0)
+
+    def _macro_undo(self, event=None) -> str:
+        """Ctrl+Z: restaura último snapshot."""
+        stack = getattr(self, "_undo_stack", None)
+        if not stack:
+            self._set_status("↩  Nada para desfazer.", toast=True)
+            return "break"
+        self._macro_steps = stack.pop()
+        self._macro_refresh_tree()
+        n = len(self._macro_steps)
+        self._set_status(
+            f"↩  Undo — {n} step{'s' if n != 1 else ''} restaurado{'s' if n != 1 else ''}.",
+            toast=True,
+        )
+        return "break"
+
     # ─────────────────────────────────────────────────────────────
     # ABA: MACRO
     # ─────────────────────────────────────────────────────────────
@@ -74,6 +103,15 @@ class MacroMixin:
         self.macro_tree.pack(side="left", fill="both", expand=True)
         macro_vsb.pack(side="right", fill="y")
         self.macro_tree.bind("<Double-1>", lambda e: self._macro_edit_step())
+        self.bind("<Control-z>", self._macro_undo)
+
+        self._macro_empty_lbl = tk.Label(
+            tree_frame,
+            text="📋  Sem steps.\nClique  + Adicionar  para começar.",
+            bg=T["bg"], fg=T["subtext"],
+            font=("Segoe UI", 10), justify="center",
+        )
+        self._macro_empty_lbl.place(relx=0.5, rely=0.5, anchor="center")
         # Tooltip ao passar o mouse: explica o que o step faz + parâmetros atuais
         Tooltip(self.macro_tree, get_text=self._macro_step_tooltip_text,
                 delay_ms=550, wraplength=380)
@@ -218,14 +256,22 @@ class MacroMixin:
                                    activebackground=T["accent_h"],
                                    bd=0, highlightthickness=0)
         self.macro_btn.pack(side="left", fill="x", expand=True)
-        self.macro_btn.bind("<Enter>", lambda e: self.macro_btn.config(
-            bg=T["red_h"] if self._macro_running else T["accent_h"]))
-        self.macro_btn.bind("<Leave>", lambda e: self.macro_btn.config(
-            bg=T["red"] if self._macro_running else T["accent"]))
+        self.macro_btn.bind("<Enter>", lambda e: self._btn_anim_hover(
+            self.macro_btn, T["red_h"] if self._macro_running else T["accent_h"]))
+        self.macro_btn.bind("<Leave>", lambda e: self._btn_anim_hover(
+            self.macro_btn, T["red"] if self._macro_running else T["accent"]))
+        Tooltip(self.macro_btn,
+                get_text=lambda e: f"Atalho: {self.var_hk_macro.get().upper()}  •  "
+                                   "Configurável em ⚙ Configurações",
+                delay_ms=700)
         self.pause_btn = self._btn(exec_row, "⏸  Pausar", self._toggle_pause,
                                     bg=T["card"], fg=T["text"],
                                     font_size=10, bold=True, padx=14, pady=11)
         self.pause_btn.pack(side="left", padx=(6, 0))
+        Tooltip(self.pause_btn,
+                get_text=lambda e: f"Atalho: {self.var_hk_pause.get().upper()}  •  "
+                                   "Pausa/retoma o macro em execução",
+                delay_ms=700)
 
     # ─────────────────────────────────────────────────────────────
     # PROFILES — coleta / aplica
@@ -438,6 +484,7 @@ class MacroMixin:
         self.macro_btn_var.set("⏹  STOP MACRO   F9")
         self._start_pulse(self.macro_btn)
         self._set_pill(self._pill_mcr, True, T["green"])
+        self._run_indicator_start()
         self._set_status("▶  macro executando...")
         # Notifica monitores de evento (ntfy)
         try: self._ntfy.fire_event("macro_started")
@@ -494,6 +541,8 @@ class MacroMixin:
         self.macro_btn.config(bg=T["accent"], fg="#ffffff")
         self.macro_btn_var.set("▶  EXECUTAR MACRO   F9")
         self._set_pill(self._pill_mcr, False)
+        if not self._click_running and not self._type_running:
+            self._run_indicator_stop()
         # Se _on_macro_stop_condition já notificou (com label específico),
         # pula a notify genérica aqui pra não duplicar.
         if getattr(self, "_stopped_by_cond", False):
@@ -508,11 +557,18 @@ class MacroMixin:
             except Exception: pass
 
     def _on_macro_step(self, idx: int) -> None:
-        """Destaca o step atual no Treeview durante a execução."""
+        """Destaca o step atual no Treeview e (em debug mode) habilita o botão Próximo."""
         items = self.macro_tree.get_children()
         if 0 <= idx < len(items):
             self.macro_tree.selection_set(items[idx])
             self.macro_tree.see(items[idx])
+        if self._debug_event is not None and self._macro_running:
+            total = len(self._macro_steps)
+            self._set_status(f"⏸  Step {idx + 1}/{total} — clique ⏭ para continuar")
+            try:
+                self.debug_next_btn.config(state="normal")
+            except Exception:
+                pass
 
     def _macro_step_tooltip_text(self, event) -> str | None:
         """Retorna texto do tooltip para a linha sob o cursor (ou None)."""
@@ -534,13 +590,6 @@ class MacroMixin:
         if desc and params:
             return f"{desc}\n\nParâmetros: {params}"
         return desc or params or None
-        if self._debug_event is not None and self._macro_running:
-            total = len(self._macro_steps)
-            self._set_status(f"⏸  Step {idx + 1}/{total} — clique ⏭ para continuar")
-            try:
-                self.debug_next_btn.config(state="normal")
-            except Exception:
-                pass
 
     # ─────────────────────────────────────────────────────────────
     # MACRO — edição de steps
@@ -549,6 +598,7 @@ class MacroMixin:
         dlg = StepDialog(self, T, driver=self._driver)
         self.wait_window(dlg)
         if dlg.result:
+            self._macro_push_undo()
             self._macro_steps.append(dlg.result)
             self._macro_refresh_tree()
 
@@ -562,6 +612,7 @@ class MacroMixin:
         dlg = StepDialog(self, T, driver=self._driver, step=self._macro_steps[idx])
         self.wait_window(dlg)
         if dlg.result:
+            self._macro_push_undo()
             self._macro_steps[idx] = dlg.result
             self._macro_refresh_tree()
             items = self.macro_tree.get_children()
@@ -574,6 +625,7 @@ class MacroMixin:
             return
         idx = self.macro_tree.index(sel[0])
         if 0 <= idx < len(self._macro_steps):
+            self._macro_push_undo()
             self._macro_steps.pop(idx)
             self._macro_refresh_tree()
 
@@ -583,6 +635,7 @@ class MacroMixin:
             return
         idx = self.macro_tree.index(sel[0])
         if idx > 0:
+            self._macro_push_undo()
             self._macro_steps[idx], self._macro_steps[idx - 1] = \
                 self._macro_steps[idx - 1], self._macro_steps[idx]
             self._macro_refresh_tree()
@@ -595,6 +648,7 @@ class MacroMixin:
             return
         idx = self.macro_tree.index(sel[0])
         if idx < len(self._macro_steps) - 1:
+            self._macro_push_undo()
             self._macro_steps[idx], self._macro_steps[idx + 1] = \
                 self._macro_steps[idx + 1], self._macro_steps[idx]
             self._macro_refresh_tree()
@@ -607,6 +661,7 @@ class MacroMixin:
             return
         idx = self.macro_tree.index(sel[0])
         if 0 <= idx < len(self._macro_steps):
+            self._macro_push_undo()
             self._macro_steps.insert(idx + 1, copy.deepcopy(self._macro_steps[idx]))
             self._macro_refresh_tree()
             items = self.macro_tree.get_children()
@@ -716,12 +771,19 @@ class MacroMixin:
             self.sc_panel.selection_set(idx)
 
     def _macro_clear(self) -> None:
+        if self._macro_steps:
+            self._macro_push_undo()
         self._macro_steps.clear()
         self._macro_refresh_tree()
 
     def _macro_refresh_tree(self) -> None:
         for item in self.macro_tree.get_children():
             self.macro_tree.delete(item)
+        if hasattr(self, "_macro_empty_lbl"):
+            if self._macro_steps:
+                self._macro_empty_lbl.place_forget()
+            else:
+                self._macro_empty_lbl.place(relx=0.5, rely=0.5, anchor="center")
         depth = 0
         for i, step in enumerate(self._macro_steps):
             # endif sai do bloco ANTES de exibir (volta a ficar alinhado com o if)

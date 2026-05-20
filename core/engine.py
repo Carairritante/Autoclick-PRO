@@ -441,6 +441,10 @@ class MacroContext:
 class SequentialRunner:
     """Executa uma lista de MacroSteps em sequência em daemon thread."""
 
+    # Cap pra evitar crescimento ilimitado se um macro chama muitos sub-macros
+    # diferentes ao longo do tempo. 32 cobre cenários reais com folga.
+    _MACRO_CACHE_MAX = 32
+
     def __init__(self, driver: WindowsDriver) -> None:
         self._driver  = driver
         self._running = False
@@ -452,7 +456,7 @@ class SequentialRunner:
         self._pause_cond = threading.Condition()
         # Cache de sub-macros (call_macro): path → (mtime, steps).
         # Evita re-ler+parsear JSON a cada chamada num loop. Invalida quando
-        # o arquivo é modificado em disco (compara mtime).
+        # o arquivo é modificado em disco (compara mtime). Capped a _MACRO_CACHE_MAX.
         self._macro_cache: dict[str, tuple[float, list]] = {}
 
     def start(
@@ -803,13 +807,14 @@ class SequentialRunner:
                 )
         elif action == "wait_image":
             if step.image_data:
-                deadline = time.time() + (step.image_timeout_ms or 5000) / 1000 / spd
+                # monotonic: imune a mudanças do relógio do sistema (NTP/DST)
+                deadline = time.monotonic() + (step.image_timeout_ms or 5000) / 1000 / spd
                 want_present = (step.image_wait_for or "present") == "present"
-                while self._running and time.time() < deadline:
+                while self._running and time.monotonic() < deadline:
                     # Respeita pausa cooperativa também aqui — wait_image pode
                     # rodar por 30s+, não pode ignorar pause esse tempo todo.
                     if self._paused:
-                        pause_start = time.time()
+                        pause_start = time.monotonic()
                         with self._pause_cond:
                             while self._paused and self._running:
                                 self._pause_cond.wait(timeout=0.1)
@@ -818,7 +823,7 @@ class SequentialRunner:
                         # Estende o deadline pelo tempo pausado: se o usuário
                         # pausa por 10s, o timeout não conta esse tempo. Sem
                         # isso, pausa longa = timeout zerado ao retomar.
-                        deadline += time.time() - pause_start
+                        deadline += time.monotonic() - pause_start
                         continue
                     found = self._driver.find_image_on_screen(
                         step.image_data, step.image_threshold,
@@ -831,6 +836,44 @@ class SequentialRunner:
                     # 200ms = ~5 OpenCV matches/s, suficiente pra UX e metade
                     # do custo de CPU vs polling 100ms anterior
                     time.sleep(0.2)
+        elif action == "wait_pixel":
+            # Polling rápido de UM pixel via GDI (~0.1ms/chamada). A 200Hz
+            # (5ms entre samples) a janela de reação é <10ms — suficiente
+            # pra skill checks de Roblox (janela típica 50-150ms).
+            # Reusa campos color_rgb/color_tolerance (do pixel_check) +
+            # image_timeout_ms/image_wait_for/image_skip_steps (do wait_image).
+            if (step.color_rgb and len(step.color_rgb) == 3
+                    and x is not None and y is not None):
+                deadline = time.monotonic() + (step.image_timeout_ms or 5000) / 1000 / spd
+                want_match = (step.image_wait_for or "present") == "present"
+                tr, tg, tb = step.color_rgb
+                tol = step.color_tolerance
+                matched = False
+                while self._running and time.monotonic() < deadline:
+                    if self._paused:
+                        pause_start = time.monotonic()
+                        with self._pause_cond:
+                            while self._paused and self._running:
+                                self._pause_cond.wait(timeout=0.1)
+                        if not self._running:
+                            break
+                        deadline += time.monotonic() - pause_start
+                        continue
+                    try:
+                        r, g, b = self._driver.get_pixel_color(x, y)
+                    except Exception:
+                        time.sleep(0.005)
+                        continue
+                    is_match = (abs(r - tr) <= tol
+                                and abs(g - tg) <= tol
+                                and abs(b - tb) <= tol)
+                    if is_match == want_match:
+                        matched = True
+                        break
+                    time.sleep(0.005)  # 5ms = 200Hz polling
+                if not matched:
+                    # Timeout sem match — pula N steps (igual image_click/wait_image)
+                    return step.image_skip_steps
         elif action == "call_macro":
             target = self._resolve_macro_target(step.call_target_kind, step.call_target)
             if target is None:
@@ -923,6 +966,42 @@ class SequentialRunner:
                 else:
                     ctx.variables[step.ocr_var] = text
                 self._notify_var(step.ocr_var, ctx.variables[step.ocr_var])
+        elif action == "clipboard_set":
+            # Coloca texto no clipboard. Aceita {var} pra interpolar variáveis.
+            resolved = self._resolve_var_value(step.var_value or "", ctx)
+            self._driver.set_clipboard_text(str(resolved))
+        elif action == "clipboard_get":
+            # Lê o clipboard e salva em ctx.variables[var_name]. Sem var_name = no-op.
+            if step.var_name:
+                text = self._driver.get_clipboard_text() or ""
+                ctx.variables[step.var_name] = text
+                self._notify_var(step.var_name, text)
+        elif action == "wait_window":
+            # Polling pelo título da janela até timeout. Pausa cooperativa respeitada.
+            if step.window_title:
+                from ui.window_picker import list_visible_windows
+                target = step.window_title.lower()
+                # monotonic: imune a mudanças do relógio do sistema (NTP/DST)
+                deadline = time.monotonic() + (step.window_timeout_ms or 5000) / 1000 / spd
+                while self._running and time.monotonic() < deadline:
+                    if self._paused:
+                        pause_start = time.monotonic()
+                        with self._pause_cond:
+                            while self._paused and self._running:
+                                self._pause_cond.wait(timeout=0.1)
+                        if not self._running:
+                            break
+                        deadline += time.monotonic() - pause_start
+                        continue
+                    try:
+                        windows = list_visible_windows()
+                    except Exception:
+                        windows = []
+                    if any(target in title.lower() for _, title in windows):
+                        break
+                    time.sleep(0.3)
+        elif action == "http_request":
+            self._do_http_request(step, ctx)
         elif action == "set_var":
             if step.var_name:
                 resolved = self._resolve_var_value(step.var_value, ctx)
@@ -958,6 +1037,63 @@ class SequentialRunner:
                 self._notify_var(step.var_name, ctx.variables.get(step.var_name))
         return 0
 
+    # ── Helper para http_request ─────────────────────────────────────────────
+    def _do_http_request(self, step, ctx: MacroContext) -> None:
+        """Executa step http_request: HTTP via requests, salva resposta em var.
+
+        Interpola {var} em URL/body/headers/auth_value. Erros de rede são
+        silenciosos no macro (pra não derrubar loop); usuário pode opcionalmente
+        checar http_save_status_var (-1 quando timeout/conexão falha).
+        """
+        if not step.http_url:
+            return
+        try:
+            import requests
+        except ImportError:
+            return  # requests deveria estar presente (vem com ntfy), mas defensivo
+        url = self._resolve_var_value(step.http_url, ctx)
+        body = self._resolve_var_value(step.http_body, ctx) if step.http_body else None
+        # Parse headers "Key: Value" linha por linha
+        headers: dict[str, str] = {}
+        for line in (step.http_headers or "").splitlines():
+            if ":" in line:
+                k, _, v = line.partition(":")
+                headers[k.strip()] = self._resolve_var_value(v.strip(), ctx)
+        # Content-Type default se tem body e usuário não definiu
+        if body and not any(h.lower() == "content-type" for h in headers):
+            headers["Content-Type"] = "application/json"
+        # Auth
+        auth = None
+        if step.http_auth_kind == "bearer" and step.http_auth_value:
+            tok = self._resolve_var_value(step.http_auth_value, ctx)
+            headers["Authorization"] = f"Bearer {tok}"
+        elif step.http_auth_kind == "basic" and step.http_auth_value:
+            creds = self._resolve_var_value(step.http_auth_value, ctx)
+            if ":" in creds:
+                user, _, pwd = creds.partition(":")
+                auth = (user, pwd)
+        # Request
+        try:
+            r = requests.request(
+                (step.http_method or "POST").upper(),
+                url,
+                data=body.encode("utf-8") if body else None,
+                headers=headers,
+                auth=auth,
+                timeout=max(1, step.http_timeout_s or 10),
+            )
+            if step.var_name:
+                ctx.variables[step.var_name] = r.text
+                self._notify_var(step.var_name, r.text)
+            if step.http_save_status_var:
+                ctx.variables[step.http_save_status_var] = r.status_code
+                self._notify_var(step.http_save_status_var, r.status_code)
+        except Exception:
+            # Timeout/conexão/etc: status -1 sinaliza falha se usuário quer saber
+            if step.http_save_status_var:
+                ctx.variables[step.http_save_status_var] = -1
+                self._notify_var(step.http_save_status_var, -1)
+
     # ── Helpers para call_macro ──────────────────────────────────────────────
     def _resolve_macro_target(self, kind: str, target: str) -> str | None:
         """Converte (kind, target) em caminho absoluto. Retorna None se inválido."""
@@ -988,9 +1124,14 @@ class SequentialRunner:
                 data = json.load(f)
             script = script_from_dict(data)
             steps = [macrostep_from_dict(d) for d in script.macro_steps]
+            # Evict mais antigo se atingir o cap (FIFO, suficiente pra esse caso)
+            if len(self._macro_cache) >= self._MACRO_CACHE_MAX:
+                oldest = next(iter(self._macro_cache))
+                self._macro_cache.pop(oldest, None)
             self._macro_cache[path] = (mtime, steps)
             return steps
-        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        except (OSError, KeyError, TypeError, ValueError):
+            # ValueError já cobre json.JSONDecodeError (subclasse)
             return []
 
 

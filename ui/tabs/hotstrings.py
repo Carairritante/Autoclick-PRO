@@ -69,17 +69,31 @@ class HotstringTabMixin:
         sb.pack(side="right", fill="y")
         self.hs_tree.config(yscrollcommand=sb.set)
 
+        self._hs_empty_lbl = tk.Label(
+            tree_frame,
+            text="✨  Nenhuma hotstring ainda.\nClique  ➕ Adicionar  ou use  📚 Exemplos  para começar.",
+            bg=T["bg"], fg=T["subtext"],
+            font=("Segoe UI", 10), justify="center",
+        )
+        self._hs_empty_lbl.place(relx=0.5, rely=0.5, anchor="center")
+
     def _refresh_hs_tree(self) -> None:
         if not hasattr(self, "hs_tree"):
             return
         for item in self.hs_tree.get_children():
             self.hs_tree.delete(item)
-        for hs in self._hotstrings.get_all():
+        items = self._hotstrings.get_all()
+        for hs in items:
             trig = hs.get("trigger", "")
             expand = hs.get("expand", "")
             preview = (expand[:50] + "…") if len(expand) > 50 else expand
             on = "✓" if hs.get("enabled", True) else "—"
             self.hs_tree.insert("", "end", values=(trig, preview, on))
+        if hasattr(self, "_hs_empty_lbl"):
+            if items:
+                self._hs_empty_lbl.place_forget()
+            else:
+                self._hs_empty_lbl.place(relx=0.5, rely=0.5, anchor="center")
 
     def _save_hotstrings(self) -> None:
         try:

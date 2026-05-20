@@ -35,14 +35,16 @@ from core.driver import WindowsDriver
 from core.engine import MacroRunner
 from core.hotstrings import HotstringManager
 from core.ntfy_client import NtfyClient
-from core.paths import HOTSTRINGS_PATH, NTFY_CONFIG_PATH, ONBOARDING_PATH
+from core.paths import HOTSTRINGS_PATH, NTFY_CONFIG_PATH, ONBOARDING_PATH, SCHEDULER_PATH
 from core.recorder import MacroRecorder
 from core.macro_schema import MacroStep, StopCondition
+from core.scheduler import SchedulerWorker
 from ui.tabs.click import ClickMixin
 from ui.tabs.hotstrings import HotstringTabMixin
 from ui.tabs.keyboard import KeyboardMixin
 from ui.tabs.macro import MacroMixin
 from ui.tabs.monitor import MonitorMixin
+from ui.tabs.scheduler import SchedulerMixin
 from ui.tabs.settings import SettingsMixin
 from ui.theme import T, THEME_DARK, THEME_LIGHT
 from ui.widgets import make_button
@@ -61,6 +63,7 @@ class AutoClickPro(
     MacroMixin,
     HotstringTabMixin,
     MonitorMixin,
+    SchedulerMixin,
     SettingsMixin,
     tk.Tk,
 ):
@@ -93,6 +96,7 @@ class AutoClickPro(
         self._type_running    = False
         self._macro_running   = False
         self._macro_steps: list[MacroStep] = []
+        self._undo_stack: list[list] = []
         self._stop_conditions: list[StopCondition] = []
         self._debug_event: threading.Event | None = None
         self._recorder        = MacroRecorder()
@@ -111,6 +115,13 @@ class AutoClickPro(
         # Hotstrings (atalhos de texto) — opt-in, desligado por padrão
         self._hotstrings = HotstringManager(self._driver)
         self.var_hotstrings_active = tk.BooleanVar(value=False)
+
+        # Agendador (worker em background — dispara macros em horários marcados)
+        self._scheduler = SchedulerWorker()
+        # Quando worker dispara regra, chama _fire_schedule na main thread
+        self._scheduler.on_fire = lambda rule: self.after(
+            0, lambda r=rule: self._fire_schedule(r)
+        )
 
         # Monitoramento (ntfy) — opt-in, conecta só quando usuário liga
         self._ntfy = NtfyClient(self._driver)
@@ -152,6 +163,9 @@ class AutoClickPro(
         self._generate_tick_wav()
         self._hotstrings.load(HOTSTRINGS_PATH)
         self._refresh_hs_tree()
+        self._scheduler.load(SCHEDULER_PATH)
+        self._refresh_sched_tree()
+        self._scheduler.start()
         self._restore_window_geometry()
 
         self.lift()
@@ -173,8 +187,8 @@ class AutoClickPro(
                     data = json.load(f)
                 if data.get("completed"):
                     return
-        except (OSError, ValueError, json.JSONDecodeError):
-            pass  # arquivo inválido/ausente = trata como primeira vez
+        except (OSError, ValueError):
+            pass  # arquivo inválido/ausente = trata como primeira vez (JSONDecodeError ⊂ ValueError)
         self.after(400, self._open_template_gallery_welcome)
 
     def _open_template_gallery_welcome(self) -> None:
@@ -414,6 +428,62 @@ class AutoClickPro(
         self._dot_clk = self._pill_clk
         self._dot_key = self._pill_key
 
+    # ─────────────────────────────────────────────────────────────
+    # ANIMATION HELPERS
+    # ─────────────────────────────────────────────────────────────
+    @staticmethod
+    def _lerp_color(c1: str, c2: str, t: float) -> str:
+        """Interpola linearmente entre duas cores hex, t em [0,1]."""
+        t = max(0.0, min(1.0, t))
+        try:
+            r1, g1, b1 = int(c1[1:3],16), int(c1[3:5],16), int(c1[5:7],16)
+            r2, g2, b2 = int(c2[1:3],16), int(c2[3:5],16), int(c2[5:7],16)
+            r = int(r1 + (r2-r1)*t)
+            g = int(g1 + (g2-g1)*t)
+            b = int(b1 + (b2-b1)*t)
+            return f"#{r:02x}{g:02x}{b:02x}"
+        except Exception:
+            return c2
+
+    def _fade_pill(self, pill: tk.Label, from_fg: str, to_fg: str,
+                   from_hl: str, to_hl: str, step: int = 0, steps: int = 8) -> None:
+        if step > steps:
+            return
+        t = step / steps
+        try:
+            pill.config(
+                fg=self._lerp_color(from_fg, to_fg, t),
+                highlightbackground=self._lerp_color(from_hl, to_hl, t),
+            )
+        except tk.TclError:
+            return
+        self.after(22, lambda: self._fade_pill(pill, from_fg, to_fg,
+                                               from_hl, to_hl, step+1, steps))
+
+    def _anim_color(self, widget, from_c: str, to_c: str,
+                    step: int, steps: int, gen: int) -> None:
+        """Anima bg de um widget via interpolação. Cancela se `gen` mudou."""
+        if getattr(widget, "_anim_gen", 0) != gen:
+            return
+        t = step / steps
+        try:
+            widget.config(bg=self._lerp_color(from_c, to_c, t))
+        except tk.TclError:
+            return
+        if step < steps:
+            self.after(16, lambda: self._anim_color(widget, from_c, to_c,
+                                                    step+1, steps, gen))
+
+    def _btn_anim_hover(self, btn: tk.Button, target: str) -> None:
+        """Dispara animação de hover no botão, cancelando a animação anterior."""
+        gen = (getattr(btn, "_anim_gen", 0) + 1) & 0xFFFF
+        btn._anim_gen = gen
+        try:
+            from_c = btn.cget("bg")
+        except tk.TclError:
+            return
+        self._anim_color(btn, from_c, target, 0, 5, gen)
+
     def _mk_pill(self, parent, text: str) -> tk.Label:
         """Cria pill de status (apagada por padrão). Use set_pill() pra ligar/desligar."""
         lbl = tk.Label(parent, text="● " + text,
@@ -446,12 +516,16 @@ class AutoClickPro(
         btn._pulse_running = False
 
     def _set_pill(self, pill: tk.Label, on: bool, color: str | None = None) -> None:
-        """Liga/desliga uma pill de status."""
+        """Liga/desliga uma pill de status com fade de cor."""
         if on:
             c = color or T["green"]
-            pill.config(fg=c, highlightbackground=c)
+            cur_fg = pill.cget("fg")
+            cur_hl = pill.cget("highlightbackground")
+            self._fade_pill(pill, cur_fg, c, cur_hl, c)
         else:
-            pill.config(fg=T["subtext"], highlightbackground=T["line_2"])
+            cur_fg = pill.cget("fg")
+            cur_hl = pill.cget("highlightbackground")
+            self._fade_pill(pill, cur_fg, T["subtext"], cur_hl, T["line_2"])
 
     # ── Notebook ──────────────────────────────────────────────────
     def _build_notebook(self) -> None:
@@ -459,29 +533,44 @@ class AutoClickPro(
         nb.pack(fill="both", expand=True, padx=12, pady=(6, 4))
         self._nb = nb  # exposto pra _toggle_theme preservar aba ativa
 
-        self.tab_click   = tk.Frame(nb, bg=T["bg"])
-        self.tab_key     = tk.Frame(nb, bg=T["bg"])
-        self.tab_macro   = tk.Frame(nb, bg=T["bg"])
-        self.tab_hs      = tk.Frame(nb, bg=T["bg"])
-        self.tab_monitor = tk.Frame(nb, bg=T["bg"])
-        self.tab_cfg     = tk.Frame(nb, bg=T["bg"])
+        self.tab_click     = tk.Frame(nb, bg=T["bg"])
+        self.tab_key       = tk.Frame(nb, bg=T["bg"])
+        self.tab_macro     = tk.Frame(nb, bg=T["bg"])
+        self.tab_hs        = tk.Frame(nb, bg=T["bg"])
+        self.tab_monitor   = tk.Frame(nb, bg=T["bg"])
+        self.tab_scheduler = tk.Frame(nb, bg=T["bg"])
+        self.tab_cfg       = tk.Frame(nb, bg=T["bg"])
 
-        nb.add(self.tab_click,   text="🖱  AutoClick")
-        nb.add(self.tab_key,     text="⌨  AutoKeyboard")
-        nb.add(self.tab_macro,   text="🤖  Macro")
-        nb.add(self.tab_hs,      text="✨  Hotstrings")
-        nb.add(self.tab_monitor, text="📡  Monitoramento")
-        nb.add(self.tab_cfg,     text="⚙  Configurações")
+        nb.add(self.tab_click,     text="🖱  AutoClick")
+        nb.add(self.tab_key,       text="⌨  AutoKeyboard")
+        nb.add(self.tab_macro,     text="🤖  Macro")
+        nb.add(self.tab_hs,        text="✨  Hotstrings")
+        nb.add(self.tab_monitor,   text="📡  Monitoramento")
+        nb.add(self.tab_scheduler, text="⏰  Agendador")
+        nb.add(self.tab_cfg,       text="⚙  Configurações")
 
         self._build_click_tab()
         self._build_keyboard_tab()
         self._build_macro_tab()
         self._build_hotstrings_tab()
         self._build_monitor_tab()
+        self._build_scheduler_tab()
         self._build_settings_tab()
 
     # ── Footer (status bar terminal-like) ─────────────────────────
     def _build_footer(self) -> None:
+        # Barra de progresso indeterminate (visível só quando rodando)
+        style = ttk.Style()
+        style.configure("Run.Horizontal.TProgressbar",
+                        troughcolor=T["bg_deep"],
+                        background=T["accent"],
+                        thickness=3)
+        self._run_bar = ttk.Progressbar(
+            self, orient="horizontal", mode="indeterminate",
+            style="Run.Horizontal.TProgressbar",
+        )
+        # Não empacota agora — só aparece quando automation inicia
+
         tk.Frame(self, bg=T["line_2"], height=1).pack(fill="x", side="bottom")
         # Clock + stats
         ftr = tk.Frame(self, bg=T["bg_deep"])
@@ -520,6 +609,100 @@ class AutoClickPro(
         except Exception:
             pass
         self.after(1000, self._tick_clock)
+
+    def _run_indicator_start(self) -> None:
+        """Mostra barra de progresso + ativa pulse no status dot."""
+        try:
+            if not self._run_bar.winfo_ismapped():
+                self._run_bar.pack(fill="x", side="bottom")
+            self._run_bar.start(12)
+        except Exception:
+            pass
+        self._dot_pulse_active = True
+        self._dot_pulse_loop()
+
+    def _run_indicator_stop(self) -> None:
+        """Para barra de progresso + desativa pulse no status dot."""
+        try:
+            self._run_bar.stop()
+            self._run_bar.pack_forget()
+        except Exception:
+            pass
+        self._dot_pulse_active = False
+        try:
+            self._status_dot.config(text="○", fg=T["subtext"])
+        except Exception:
+            pass
+
+    def _dot_pulse_loop(self) -> None:
+        """Alterna ○ / ● enquanto _dot_pulse_active for True."""
+        if not getattr(self, "_dot_pulse_active", False):
+            return
+        try:
+            self._status_dot.config(
+                text="●" if self._status_dot.cget("text") == "○" else "○",
+                fg=T["green"],
+            )
+        except Exception:
+            return
+        self.after(550, self._dot_pulse_loop)
+
+    def _show_toast(self, msg: str, duration_ms: int = 2800) -> None:
+        """Pequeno painel no canto inferior direito que desaparece com fade."""
+        # Cancela toast anterior se ainda visível
+        prev = getattr(self, "_toast_win", None)
+        if prev:
+            try:
+                prev.destroy()
+            except Exception:
+                pass
+
+        toast = tk.Toplevel(self)
+        toast.overrideredirect(True)
+        toast.attributes("-topmost", True)
+        try:
+            toast.attributes("-alpha", 0.93)
+        except Exception:
+            pass
+        toast.configure(bg=T["card"])
+        self._toast_win = toast
+
+        inner = tk.Frame(toast, bg=T["card"], padx=14, pady=10,
+                         highlightbackground=T["accent"], highlightthickness=1)
+        inner.pack(fill="both", expand=True)
+        tk.Label(inner, text=msg, bg=T["card"], fg=T["text"],
+                 font=("Segoe UI", 9), anchor="w").pack(anchor="w")
+
+        # Posiciona no canto inferior direito da janela principal
+        def _place() -> None:
+            try:
+                toast.update_idletasks()
+                tw = toast.winfo_reqwidth()
+                th = toast.winfo_reqheight()
+                wx = self.winfo_x() + self.winfo_width()  - tw - 16
+                wy = self.winfo_y() + self.winfo_height() - th - 56
+                toast.geometry(f"+{max(0,wx)}+{max(0,wy)}")
+            except Exception:
+                pass
+
+        self.after(10, _place)
+
+        def _fade(step: int = 0, total: int = 12) -> None:
+            if not toast.winfo_exists():
+                return
+            try:
+                toast.attributes("-alpha", max(0.0, 0.93 * (1 - step / total)))
+            except Exception:
+                pass
+            if step < total:
+                self.after(35, lambda: _fade(step + 1, total))
+            else:
+                try:
+                    toast.destroy()
+                except Exception:
+                    pass
+
+        self.after(duration_ms, _fade)
 
     # ─────────────────────────────────────────────────────────────
     # HELPERS
@@ -566,20 +749,24 @@ class AutoClickPro(
         tk.Frame(f, bg=T["line"], height=1).pack(fill="x", pady=(0, 0))
         return f
 
-    def _set_status(self, msg: str) -> None:
+    def _set_status(self, msg: str, toast: bool = False) -> None:
         self.lbl_status.config(text=msg)
-        if msg.startswith(("🖱", "⌨", "▶")):
-            self._status_dot.config(fg=T["green"])
-        elif msg.startswith(("⏹", "🛑")):
-            self._status_dot.config(fg=T["red"])
-        elif msg.startswith("⏳"):
-            self._status_dot.config(fg=T["accent2"])
-        elif msg.startswith("✅"):
-            self._status_dot.config(fg=T["green"])
-        elif msg.startswith("⚠"):
-            self._status_dot.config(fg=T["accent2"])
-        else:
-            self._status_dot.config(fg=T["subtext"])
+        # Dot color só muda quando não está em pulse (pulse controla o dot)
+        if not getattr(self, "_dot_pulse_active", False):
+            if msg.startswith(("🖱", "⌨", "▶")):
+                self._status_dot.config(fg=T["green"])
+            elif msg.startswith(("⏹", "🛑")):
+                self._status_dot.config(fg=T["red"])
+            elif msg.startswith("⏳"):
+                self._status_dot.config(fg=T["accent2"])
+            elif msg.startswith("✅"):
+                self._status_dot.config(fg=T["green"])
+            elif msg.startswith("⚠"):
+                self._status_dot.config(fg=T["accent2"])
+            else:
+                self._status_dot.config(fg=T["subtext"])
+        if toast:
+            self._show_toast(msg)
 
     def _fmt_time(self, secs: float) -> str:
         s = int(secs)
@@ -867,6 +1054,13 @@ class AutoClickPro(
             self._macro_refresh_tree()
         except Exception:
             pass
+        # Hotstrings/scheduler/monitor: o _build_*_tab rebuilda treeview vazio.
+        # scheduler/monitor já chamam refresh internamente; hotstrings precisa
+        # de chamada explícita aqui pra repopular depois de troca de tema.
+        try:
+            self._refresh_hs_tree()
+        except Exception:
+            pass
         # Restaurar aba ativa
         try:
             if hasattr(self, "_nb"):
@@ -904,6 +1098,10 @@ class AutoClickPro(
             pass
         try:
             self._ntfy.stop()
+        except Exception:
+            pass
+        try:
+            self._scheduler.stop()
         except Exception:
             pass
         try:

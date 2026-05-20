@@ -703,8 +703,8 @@ class WindowsDriver:
         except Exception:
             return None
 
-        deadline = time.time() + max(0, timeout_ms) / 1000
-        last_err: Exception | None = None
+        # monotonic: imune a mudanças do relógio do sistema (NTP/DST)
+        deadline = time.monotonic() + max(0, timeout_ms) / 1000
         while True:
             try:
                 found = pyautogui.locateOnScreen(
@@ -712,20 +712,12 @@ class WindowsDriver:
                     confidence=max(0.5, min(1.0, threshold)),
                     region=region,
                 )
-            except Exception as exc:
+            except Exception:
                 found = None
-                last_err = exc
             if found:
                 return (int(found.left), int(found.top),
                         int(found.width), int(found.height))
-            if timeout_ms <= 0 or time.time() >= deadline:
-                # Se NUNCA achou E houve exceção persistente E opencv falta,
-                # registra o erro como atributo para a UI poder mostrar diagnóstico
-                if last_err is not None and not self.has_opencv():
-                    self._last_image_error = (
-                        "opencv-python não instalado — image_click não funciona. "
-                        "Rode: pip install opencv-python"
-                    )
+            if timeout_ms <= 0 or time.monotonic() >= deadline:
                 return None
             time.sleep(0.1)
 

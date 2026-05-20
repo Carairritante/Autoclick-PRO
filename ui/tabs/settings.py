@@ -225,7 +225,7 @@ class SettingsMixin:
             self._apply_script(script_from_dict(d))
             self._apply_ui_profile(ui_from_dict(d))
             self.var_slot_names[slot - 1].set(d.get("slot_name", ""))
-        except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as e:
+        except (OSError, KeyError, TypeError, ValueError) as e:
             self._set_status(f"❌  Slot {slot} corrompido ou inválido ({type(e).__name__}). Não carregado.")
             return
         self._set_status(f"📂  Perfil carregado do Slot {slot}.")
@@ -254,7 +254,7 @@ class SettingsMixin:
                     d = json.load(f)
                 self._apply_script(script_from_dict(d))
                 self._apply_ui_profile(ui_from_dict(d))
-            except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as e:
+            except (OSError, KeyError, TypeError, ValueError) as e:
                 self._set_status(f"❌  Arquivo inválido ({type(e).__name__}). Não carregado.")
                 return
             self._set_status(f"📂  Perfil carregado de {os.path.basename(path)}.")

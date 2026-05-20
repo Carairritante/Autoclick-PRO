@@ -22,6 +22,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from ui.theme import T
+from ui.widgets import Tooltip
 
 
 class ClickMixin:
@@ -238,10 +239,14 @@ class ClickMixin:
                                    activebackground=T["accent_h"],
                                    bd=0, highlightthickness=0)
         self.click_btn.pack(fill="x", padx=8, pady=(10, 10))
-        self.click_btn.bind("<Enter>", lambda e: self.click_btn.config(
-            bg=T["red_h"] if self._click_running else T["accent_h"]))
-        self.click_btn.bind("<Leave>", lambda e: self.click_btn.config(
-            bg=T["red"] if self._click_running else T["accent"]))
+        self.click_btn.bind("<Enter>", lambda e: self._btn_anim_hover(
+            self.click_btn, T["red_h"] if self._click_running else T["accent_h"]))
+        self.click_btn.bind("<Leave>", lambda e: self._btn_anim_hover(
+            self.click_btn, T["red"] if self._click_running else T["accent"]))
+        Tooltip(self.click_btn,
+                get_text=lambda e: f"Atalho: {self.var_hk_clk.get().upper()}  •  "
+                                   "Configurável em ⚙ Configurações",
+                delay_ms=700)
 
     # ─────────────────────────────────────────────────────────────
     # CLICK — INTERVAL / PRESETS
@@ -383,6 +388,7 @@ class ClickMixin:
         self.click_btn_var.set("⏹  STOP AUTOCLICK   F6")
         self._set_pill(self._pill_clk, True, T["green"])
         self._start_pulse(self.click_btn)
+        self._run_indicator_start()
         self._set_status("▶  autoclicker rodando...")
         if self.var_overlay.get():
             self._overlay = self._create_overlay()
@@ -395,6 +401,8 @@ class ClickMixin:
         self.click_btn.config(bg=T["accent"], fg="#ffffff")
         self.click_btn_var.set("▶  START AUTOCLICK   F6")
         self._set_pill(self._pill_clk, False)
+        if not self._type_running and not self._macro_running:
+            self._run_indicator_stop()
         self._set_status(f"⏹  autoclicker parado.  ∑ {self._session_clicks} cliques.")
         if self._overlay:
             try:

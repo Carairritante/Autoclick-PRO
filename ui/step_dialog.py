@@ -23,25 +23,30 @@ T_DEFAULT = {
 
 # Mapa ação → label e emoji para o Treeview
 ACTION_LABELS: dict[str, str] = {
-    "click":        "🖱 Click",
-    "double_click": "🖱🖱 Double Click",
-    "right_click":  "🖱 Right Click",
-    "move":         "➡ Mover",
-    "drag":         "↔ Arrastar",
-    "type":         "⌨ Digitar",
-    "wait":         "⏱ Aguardar",
-    "wait_image":   "⏳ Aguardar Imagem",
-    "scroll":       "🖱 Scroll",
-    "key_press":    "🔑 Tecla",
-    "pixel_check":  "🎨 Pixel Check",
-    "image_click":  "🖼 Image Click",
-    "click_text":   "🔤 Click Texto (OCR)",
-    "ocr_read":     "📖 OCR (Ler Texto)",
-    "set_var":      "📝 Set Variável",
-    "call_macro":   "📞 Chamar Macro",
-    "if":           "🔀 If (condição)",
-    "else":         "↪ Else",
-    "endif":        "⏹ EndIf",
+    "click":          "🖱 Click",
+    "double_click":   "🖱🖱 Double Click",
+    "right_click":    "🖱 Right Click",
+    "move":           "➡ Mover",
+    "drag":           "↔ Arrastar",
+    "type":           "⌨ Digitar",
+    "wait":           "⏱ Aguardar",
+    "wait_image":     "⏳ Aguardar Imagem",
+    "wait_pixel":     "⏳ Aguardar Pixel (cor)",
+    "wait_window":    "🪟 Aguardar Janela",
+    "scroll":         "🖱 Scroll",
+    "key_press":      "🔑 Tecla",
+    "pixel_check":    "🎨 Pixel Check",
+    "image_click":    "🖼 Image Click",
+    "click_text":     "🔤 Click Texto (OCR)",
+    "ocr_read":       "📖 OCR (Ler Texto)",
+    "set_var":        "📝 Set Variável",
+    "clipboard_set":  "📋 Clipboard Set",
+    "clipboard_get":  "📋 Clipboard Get",
+    "call_macro":     "📞 Chamar Macro",
+    "http_request":   "🌐 HTTP Request",
+    "if":             "🔀 If (condição)",
+    "else":           "↪ Else",
+    "endif":          "⏹ EndIf",
 }
 
 OCR_LANGS = ["eng", "por", "spa", "fra", "deu", "ita", "jpn", "chi_sim", "kor", "rus"]
@@ -61,6 +66,7 @@ ACTION_DESCRIPTIONS: dict[str, str] = {
     "type":         "Digita um texto. Use {ENTER}, {TAB}, {F1}…{F12} pra teclas especiais.",
     "wait":         "Pausa por X milissegundos antes do próximo step.",
     "wait_image":   "Espera uma imagem aparecer ou sumir da tela antes de continuar.",
+    "wait_pixel":   "Espera um pixel ficar de uma cor específica. Rápido (~5ms reação) — ideal pra skill checks de jogos.",
     "scroll":       "Rola o scroll do mouse (positivo = sobe, negativo = desce).",
     "key_press":    "Aperta uma tecla. Aceita combos como ctrl+c, alt+f4, shift+tab.",
     "pixel_check":  "Lê a cor de um pixel — se bater (ou não), pula N steps. É um 'if' visual.",
@@ -68,7 +74,11 @@ ACTION_DESCRIPTIONS: dict[str, str] = {
     "click_text":   "Procura uma palavra/frase na tela (qualquer fonte/cor) e clica. Ex: digite 'EASY' e ele clica onde achar.",
     "ocr_read":     "Lê texto de uma região da tela e guarda numa variável.",
     "set_var":      "Cria/altera variável: set, add, sub, mul, div, concat, e ler/escrever clipboard.",
+    "clipboard_set":"Copia um texto pro clipboard (área de transferência). Aceita {variavel} pra interpolar.",
+    "clipboard_get":"Lê o texto atual do clipboard e salva numa variável pra usar depois.",
+    "wait_window":  "Pausa o macro até uma janela com título (parcial) aparecer. Útil pra esperar app abrir.",
     "call_macro":   "Executa outro macro inteiro (slot 1/2/3 ou arquivo .json). Reusa lógica.",
+    "http_request": "Chama uma API REST (Discord webhook, Telegram bot, Home Assistant, etc). Salva a resposta numa variável.",
     "if":           "Inicia bloco condicional. Steps até Else/EndIf rodam só se a condição der true.",
     "else":         "Marca o bloco que roda se o If for falso. Precisa estar entre If e EndIf.",
     "endif":        "Fecha o bloco If/Else.",
@@ -108,6 +118,11 @@ def step_to_params_str(step: MacroStep) -> str:
         wf = step.image_wait_for or "present"
         has = "✓" if step.image_data else "✗"
         return f"{wf} ({has} tpl) timeout={step.image_timeout_ms}ms"
+    elif a == "wait_pixel":
+        coord = f"({step.x}, {step.y})" if step.x is not None else "(?)"
+        rgb = f"RGB{tuple(step.color_rgb)}" if step.color_rgb else "RGB(?)"
+        wf = step.image_wait_for or "present"
+        return f"{coord} {rgb} tol={step.color_tolerance} {wf} t/o={step.image_timeout_ms}ms"
     elif a == "call_macro":
         import os
         kind = step.call_target_kind or "slot"
@@ -147,6 +162,26 @@ def step_to_params_str(step: MacroStep) -> str:
     elif a == "set_var":
         name = step.var_name or "?"
         return f"{{{name}}} {step.var_op} {step.var_value!r}"
+    elif a == "clipboard_set":
+        v = (step.var_value or "")[:30]
+        return f"clipboard ← {v!r}" + ("…" if len(step.var_value or "") > 30 else "")
+    elif a == "clipboard_get":
+        name = step.var_name or "?"
+        return f"{{{name}}} ← clipboard"
+    elif a == "wait_window":
+        title = (step.window_title or "?")[:30]
+        return f"'{title}' timeout={step.window_timeout_ms}ms"
+    elif a == "http_request":
+        method = step.http_method or "POST"
+        url = step.http_url or "?"
+        if len(url) > 40:
+            url = url[:37] + "…"
+        extras = []
+        if step.http_auth_kind and step.http_auth_kind != "none":
+            extras.append(step.http_auth_kind)
+        if step.var_name:
+            extras.append(f"→{{{step.var_name}}}")
+        return f"{method} {url}" + (f"  [{' '.join(extras)}]" if extras else "")
     elif a == "if":
         ct = step.cond_type or "var"
         op = step.cond_op or ""
@@ -293,6 +328,27 @@ class StepDialog(tk.Toplevel):
             value=bool(step.text_use_region) if step else False)
         self._var_text_skip       = tk.StringVar(
             value=str(step.text_skip_steps) if step else "0")
+        # wait_window
+        self._var_window_title      = tk.StringVar(
+            value=step.window_title if step else "")
+        self._var_window_timeout_ms = tk.StringVar(
+            value=str(step.window_timeout_ms) if step else "5000")
+        # http_request
+        self._var_http_url           = tk.StringVar(value=step.http_url if step else "")
+        self._var_http_method        = tk.StringVar(value=step.http_method if step else "POST")
+        self._var_http_body          = tk.StringVar(value=step.http_body if step else "")
+        self._var_http_headers       = tk.StringVar(value=step.http_headers if step else "")
+        self._var_http_auth_kind     = tk.StringVar(value=step.http_auth_kind if step else "none")
+        self._var_http_auth_value    = tk.StringVar(value=step.http_auth_value if step else "")
+        self._var_http_timeout       = tk.StringVar(value=str(step.http_timeout_s) if step else "10")
+        self._var_http_save_status   = tk.StringVar(value=step.http_save_status_var if step else "")
+        # Auto-expande "Avançado" se step já tem qualquer config avançada preenchida
+        self._var_http_show_advanced = tk.BooleanVar(value=bool(
+            step and (step.http_headers or (step.http_auth_kind and step.http_auth_kind != "none")
+                      or step.http_save_status_var or (step.action == "http_request" and step.var_name))
+        ))
+        self._http_body_widget: tk.Text | None = None
+        self._http_headers_widget: tk.Text | None = None
 
         if step and step.text:
             self._var_text.set(step.text)
@@ -383,6 +439,61 @@ class StepDialog(tk.Toplevel):
             entry(self._var_img_timeout, 5)
             lbl("Delay pré-step (ms):", 10)
             entry(self._var_delay, 10)
+            return
+
+        if action == "wait_pixel":
+            lbl("X:", 0); entry(self._var_x, 0)
+            lbl("Y:", 1); entry(self._var_y, 1)
+            self._btn(f, "🎨 Capturar Cor (3s)", self._capture_color,
+                      T["accent2"], padx=6, pady=3
+                      ).grid(row=0, column=2, padx=8)
+            self._btn(f, "🎯 Picker Visual", self._open_color_picker,
+                      T["accent2"], padx=6, pady=3
+                      ).grid(row=1, column=2, padx=8)
+            self._color_preview = tk.Label(f, text="  ", bg=self._rgb_hex(),
+                                           relief="solid", bd=1, width=4)
+            self._color_preview.grid(row=0, column=3, rowspan=2, padx=4)
+
+            lbl("R:", 2); entry(self._var_color_r, 2, w=5)
+            lbl("G:", 3); entry(self._var_color_g, 3, w=5)
+            lbl("B:", 4); entry(self._var_color_b, 4, w=5)
+            for v in (self._var_color_r, self._var_color_g, self._var_color_b):
+                v.trace_add("write", lambda *_: self._update_color_preview())
+
+            lbl("Tolerância:", 5)
+            tk.Spinbox(f, textvariable=self._var_tolerance, from_=0, to=255,
+                       width=5, bg=T["card"], fg=T["text"], relief="flat",
+                       font=("Consolas", 10)).grid(row=5, column=1, sticky="w")
+            tk.Label(f, text="0=exata; 20-40=tolera leve variação de iluminação",
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                     ).grid(row=5, column=2, columnspan=2, sticky="w")
+
+            lbl("Aguardar:", 6)
+            ttk.Combobox(f, textvariable=self._var_img_wait_for, values=WAIT_IMG_OPS,
+                         state="readonly", width=12, font=("Segoe UI", 10)
+                         ).grid(row=6, column=1, sticky="w")
+            tk.Label(f, text="present = espera a cor aparecer • absent = espera sumir",
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                     ).grid(row=7, column=1, columnspan=3, sticky="w")
+
+            lbl("Timeout (ms):", 8)
+            entry(self._var_img_timeout, 8)
+            tk.Label(f, text="Polling ~200Hz (5ms entre samples). Use 200-500ms pra skill checks.",
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8),
+                     wraplength=420, justify="left"
+                     ).grid(row=9, column=1, columnspan=3, sticky="w")
+
+            lbl("Pular N steps se timeout:", 10)
+            tk.Spinbox(f, textvariable=self._var_img_skip, from_=0, to=100,
+                       width=5, bg=T["card"], fg=T["text"], relief="flat",
+                       font=("Consolas", 10)).grid(row=10, column=1, sticky="w")
+            tk.Label(f, text="Útil em loops: se a cor não veio, pula o key_press seguinte e tenta no próximo ciclo.",
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8),
+                     wraplength=420, justify="left"
+                     ).grid(row=11, column=0, columnspan=4, sticky="w")
+
+            lbl("Delay pré-step (ms):", 12)
+            entry(self._var_delay, 12)
             return
 
         if action == "call_macro":
@@ -483,7 +594,10 @@ class StepDialog(tk.Toplevel):
             entry(self._var_y, 1)
             cap_btn = self._btn(f, "🎨 Capturar Cor (3s)", self._capture_color,
                                 T["accent2"], padx=6, pady=3)
-            cap_btn.grid(row=0, column=2, rowspan=2, padx=8)
+            cap_btn.grid(row=0, column=2, padx=8)
+            pick_btn = self._btn(f, "🎯 Picker Visual", self._open_color_picker,
+                                 T["accent2"], padx=6, pady=3)
+            pick_btn.grid(row=1, column=2, padx=8)
 
             # Preview da cor
             self._color_preview = tk.Label(f, text="  ", bg=self._rgb_hex(),
@@ -747,7 +861,10 @@ class StepDialog(tk.Toplevel):
                 lbl("Y:", 2); entry(self._var_y, 2)
                 cap_btn = self._btn(f, "🎨 Capturar Cor (3s)", self._capture_color,
                                     T["accent2"], padx=6, pady=3)
-                cap_btn.grid(row=1, column=2, rowspan=2, padx=8)
+                cap_btn.grid(row=1, column=2, padx=8)
+                pick_btn = self._btn(f, "🎯 Picker Visual", self._open_color_picker,
+                                     T["accent2"], padx=6, pady=3)
+                pick_btn.grid(row=2, column=2, padx=8)
                 self._color_preview = tk.Label(f, text="  ", bg=self._rgb_hex(),
                                                relief="solid", bd=1, width=4)
                 self._color_preview.grid(row=1, column=3, rowspan=2, padx=4)
@@ -772,6 +889,151 @@ class StepDialog(tk.Toplevel):
 
             lbl("Delay pré-step (ms):", 10)
             entry(self._var_delay, 10)
+            return
+
+        if action == "clipboard_set":
+            lbl("Texto a copiar:", 0)
+            tk.Entry(f, textvariable=self._var_var_value, width=32, bg=T["card"],
+                     fg=T["text"], insertbackground=T["text"], font=("Consolas", 11),
+                     relief="flat", bd=4).grid(row=0, column=1, columnspan=2, sticky="w")
+            tk.Label(f, text='Use "{nome}" pra interpolar variável  •  ex: {ocr_var} ou "olá mundo"',
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                     ).grid(row=1, column=1, columnspan=3, sticky="w")
+            tk.Label(f, text="Dica: combine com 'Tecla ctrl+v' depois pra colar na janela ativa.",
+                     bg=T["bg"], fg=T["accent2"], font=("Segoe UI", 8, "italic")
+                     ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
+            lbl("Delay pré-step (ms):", 10)
+            entry(self._var_delay, 10)
+            return
+
+        if action == "clipboard_get":
+            lbl("Salvar em:", 0)
+            tk.Entry(f, textvariable=self._var_var_name, width=20, bg=T["card"],
+                     fg=T["text"], insertbackground=T["text"], font=("Consolas", 11),
+                     relief="flat", bd=4).grid(row=0, column=1, columnspan=2, sticky="w")
+            tk.Label(f, text='Nome da variável que vai receber o conteúdo do clipboard.',
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                     ).grid(row=1, column=1, columnspan=3, sticky="w")
+            tk.Label(f, text="Depois use {nome} em outro step (set_var concat, type, etc).",
+                     bg=T["bg"], fg=T["accent2"], font=("Segoe UI", 8, "italic")
+                     ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
+            lbl("Delay pré-step (ms):", 10)
+            entry(self._var_delay, 10)
+            return
+
+        if action == "wait_window":
+            lbl("Título (parcial):", 0)
+            tk.Entry(f, textvariable=self._var_window_title, width=32, bg=T["card"],
+                     fg=T["text"], insertbackground=T["text"], font=("Consolas", 11),
+                     relief="flat", bd=4).grid(row=0, column=1, columnspan=2, sticky="w")
+            self._btn(f, "🪟 Escolher janela aberta", self._pick_window_title,
+                       T["accent2"], padx=6, pady=3
+                       ).grid(row=1, column=1, sticky="w", pady=4)
+            tk.Label(f, text="Busca substring no título (case-insensitive). Ex: 'notepad' bate em 'Sem título — Bloco de Notas'.",
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8),
+                     wraplength=420, justify="left"
+                     ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(2, 0))
+            lbl("Timeout (ms):", 3)
+            entry(self._var_window_timeout_ms, 3)
+            tk.Label(f, text="Macro continua quando janela aparecer ou timeout estourar.",
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                     ).grid(row=4, column=0, columnspan=4, sticky="w")
+            lbl("Delay pré-step (ms):", 10)
+            entry(self._var_delay, 10)
+            return
+
+        if action == "http_request":
+            # ── MODO SIMPLES ──
+            lbl("URL:", 0)
+            tk.Entry(f, textvariable=self._var_http_url, width=44,
+                     bg=T["card"], fg=T["text"], insertbackground=T["text"],
+                     font=("Consolas", 10), relief="flat", bd=4
+                     ).grid(row=0, column=1, columnspan=3, sticky="we", pady=2)
+
+            lbl("Método:", 1)
+            ttk.Combobox(f, textvariable=self._var_http_method,
+                         values=["GET", "POST", "PUT", "DELETE", "PATCH"],
+                         state="readonly", width=10, font=("Segoe UI", 10)
+                         ).grid(row=1, column=1, sticky="w")
+
+            lbl("Body:", 2)
+            body_text = tk.Text(f, height=4, width=44, bg=T["card"], fg=T["text"],
+                                insertbackground=T["text"], font=("Consolas", 10),
+                                relief="flat", padx=6, pady=4, wrap="word")
+            body_text.grid(row=2, column=1, columnspan=3, sticky="we", pady=2)
+            if self._var_http_body.get():
+                body_text.insert("1.0", self._var_http_body.get())
+            self._http_body_widget = body_text
+            tk.Label(f, text='JSON ou texto. Aceita {variavel}. Ex: {"content": "{nome}"}',
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                     ).grid(row=3, column=1, columnspan=3, sticky="w")
+
+            # ── TOGGLE AVANÇADO ──
+            tk.Checkbutton(f, text="🔧 Mostrar opções avançadas (headers, auth, timeout, salvar resposta)",
+                           variable=self._var_http_show_advanced,
+                           command=self._refresh_fields,
+                           bg=T["bg"], fg=T["text"], selectcolor=T.get("sel", "#7a1a1a"),
+                           activebackground=T["bg"], font=("Segoe UI", 9)
+                           ).grid(row=4, column=0, columnspan=4, sticky="w", pady=(8, 4))
+
+            if self._var_http_show_advanced.get():
+                lbl("Headers (Key: Value por linha):", 5)
+                hdr_text = tk.Text(f, height=3, width=44, bg=T["card"], fg=T["text"],
+                                   insertbackground=T["text"], font=("Consolas", 9),
+                                   relief="flat", padx=6, pady=4, wrap="none")
+                hdr_text.grid(row=5, column=1, columnspan=3, sticky="we", pady=2)
+                if self._var_http_headers.get():
+                    hdr_text.insert("1.0", self._var_http_headers.get())
+                self._http_headers_widget = hdr_text
+                tk.Label(f, text="Content-Type: application/json é automático se body não vazio.",
+                         bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                         ).grid(row=6, column=1, columnspan=3, sticky="w")
+
+                lbl("Autenticação:", 7)
+                ttk.Combobox(f, textvariable=self._var_http_auth_kind,
+                             values=["none", "bearer", "basic"], state="readonly",
+                             width=10, font=("Segoe UI", 10)
+                             ).grid(row=7, column=1, sticky="w")
+                self._var_http_auth_kind.trace_add("write", lambda *_: self._refresh_fields())
+
+                ak = self._var_http_auth_kind.get() or "none"
+                if ak == "bearer":
+                    lbl("Token:", 8)
+                    tk.Entry(f, textvariable=self._var_http_auth_value, width=36, bg=T["card"],
+                             fg=T["text"], insertbackground=T["text"], font=("Consolas", 10),
+                             relief="flat", bd=4, show="•"
+                             ).grid(row=8, column=1, columnspan=2, sticky="w")
+                elif ak == "basic":
+                    lbl("user:pass:", 8)
+                    tk.Entry(f, textvariable=self._var_http_auth_value, width=36, bg=T["card"],
+                             fg=T["text"], insertbackground=T["text"], font=("Consolas", 10),
+                             relief="flat", bd=4, show="•"
+                             ).grid(row=8, column=1, columnspan=2, sticky="w")
+                if ak in ("bearer", "basic"):
+                    tk.Label(f, text="⚠ Salvo em texto plano no slot/arquivo. Não é password manager.",
+                             bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                             ).grid(row=9, column=1, columnspan=3, sticky="w")
+
+                lbl("Timeout (s):", 10)
+                tk.Spinbox(f, textvariable=self._var_http_timeout, from_=1, to=120,
+                           width=5, bg=T["card"], fg=T["text"], relief="flat",
+                           font=("Consolas", 10)).grid(row=10, column=1, sticky="w")
+
+                lbl("Salvar body em var:", 11)
+                tk.Entry(f, textvariable=self._var_var_name, width=20, bg=T["card"],
+                         fg=T["text"], insertbackground=T["text"], font=("Consolas", 11),
+                         relief="flat", bd=4).grid(row=11, column=1, sticky="w")
+
+                lbl("Salvar status HTTP em var:", 12)
+                tk.Entry(f, textvariable=self._var_http_save_status, width=20, bg=T["card"],
+                         fg=T["text"], insertbackground=T["text"], font=("Consolas", 11),
+                         relief="flat", bd=4).grid(row=12, column=1, sticky="w")
+                tk.Label(f, text="Status -1 = erro de rede/timeout. Use If pra checar.",
+                         bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                         ).grid(row=13, column=1, columnspan=3, sticky="w")
+
+            lbl("Delay pré-step (ms):", 14)
+            entry(self._var_delay, 14)
             return
 
         if action == "set_var":
@@ -857,6 +1119,96 @@ class StepDialog(tk.Toplevel):
             self.after(0, self._update_color_preview)
 
         threading.Thread(target=_do, daemon=True).start()
+
+    def _open_color_picker(self) -> None:
+        """Picker visual: tooltip seguindo cursor mostra cor RGB live.
+
+        Click confirma e preenche X/Y/RGB. Esc cancela. Diferente do
+        _capture_color (espera 3s), aqui o usuário vê a cor antes de
+        confirmar — sem contagem regressiva.
+        """
+        if not self._driver:
+            return
+        self.withdraw()
+        self.update()
+        time.sleep(0.2)
+
+        T = self._T
+        tip = tk.Toplevel(self)
+        tip.overrideredirect(True)
+        tip.attributes("-topmost", True)
+        tip.attributes("-alpha", 0.95)
+        tip.configure(bg=T["card"], bd=1, relief="solid")
+
+        swatch = tk.Label(tip, bg="#000000", width=4, height=2, relief="solid", bd=1)
+        swatch.pack(side="left", padx=4, pady=4)
+        info = tk.Label(tip, text="", bg=T["card"], fg=T["text"],
+                        font=("Consolas", 10), justify="left", anchor="w")
+        info.pack(side="left", padx=(0, 8), pady=4)
+
+        state = {"running": True, "x": 0, "y": 0, "r": 0, "g": 0, "b": 0}
+
+        def tick():
+            if not state["running"]:
+                return
+            try:
+                x, y = self._driver.get_position()
+                r, g, b = self._driver.get_pixel_color(int(x), int(y))
+            except Exception:
+                self.after(80, tick)
+                return
+            state.update(x=int(x), y=int(y), r=r, g=g, b=b)
+            hex_color = f"#{r:02x}{g:02x}{b:02x}"
+            swatch.config(bg=hex_color)
+            info.config(text=f"({x},{y})\nRGB({r},{g},{b})\n{hex_color}\n[Click=OK Esc=cancela]")
+            tip.geometry(f"+{int(x) + 18}+{int(y) + 18}")
+            self.after(80, tick)
+
+        # pynput pra capturar click/Esc globalmente sem mexer no `keyboard`
+        # global do app (F6/F7/F8 dependem dele).
+        from pynput import mouse as pm, keyboard as pk
+
+        def finalize(do_save: bool):
+            if not state["running"]:
+                return
+            state["running"] = False
+            try:
+                mouse_listener.stop()
+            except Exception:
+                pass
+            try:
+                key_listener.stop()
+            except Exception:
+                pass
+            tip.destroy()
+            self.deiconify()
+            self.lift()
+            if do_save:
+                self._var_x.set(str(state["x"]))
+                self._var_y.set(str(state["y"]))
+                self._var_color_r.set(str(state["r"]))
+                self._var_color_g.set(str(state["g"]))
+                self._var_color_b.set(str(state["b"]))
+                self._update_color_preview()
+
+        def on_click(_x, _y, button, pressed):
+            if pressed and button == pm.Button.left:
+                self.after(0, lambda: finalize(True))
+                return False
+
+        def on_key(key):
+            if key == pk.Key.esc:
+                self.after(0, lambda: finalize(False))
+                return False
+            if key == pk.Key.enter:
+                self.after(0, lambda: finalize(True))
+                return False
+
+        mouse_listener = pm.Listener(on_click=on_click)
+        key_listener = pk.Listener(on_press=on_key)
+        mouse_listener.start()
+        key_listener.start()
+        tick()
 
     # ─────────────────────────────────────────────────────────────
     # IMAGE CLICK — captura de região e preview
@@ -1127,6 +1479,18 @@ class StepDialog(tk.Toplevel):
         if path:
             self._var_call_target.set(path)
 
+    def _pick_window_title(self) -> None:
+        """Abre modal listando janelas abertas; preenche título escolhido."""
+        from ui.window_picker import pick_window
+        result = pick_window(
+            self, self._T,
+            title_text="Escolher janela",
+            prompt="Selecione a janela cujo título o macro vai aguardar:",
+        )
+        if result:
+            _hwnd, title = result
+            self._var_window_title.set(title)
+
     # ─────────────────────────────────────────────────────────────
     # OK
     # ─────────────────────────────────────────────────────────────
@@ -1193,7 +1557,7 @@ class StepDialog(tk.Toplevel):
             text_use_region = bool(self._var_text_use_region.get())
             text_skip_steps = max(0, _int(self._var_text_skip, 0))
 
-        # Variable fields (compartilhado: set_var usa, if-var também)
+        # Variable fields (compartilhado: set_var usa, if-var também, clipboard_*)
         var_name = ""
         var_value = ""
         var_op = "set"
@@ -1201,8 +1565,19 @@ class StepDialog(tk.Toplevel):
             var_name  = self._var_var_name.get().strip()
             var_value = self._var_var_value.get()
             var_op    = self._var_var_op.get()
+        elif action == "clipboard_set":
+            var_value = self._var_var_value.get()
+        elif action == "clipboard_get":
+            var_name = self._var_var_name.get().strip()
         elif action == "if" and self._var_cond_type.get() == "var":
             var_name = self._var_var_name.get().strip()
+
+        # wait_window — título (parcial) + timeout
+        window_title = ""
+        window_timeout_ms = 5000
+        if action == "wait_window":
+            window_title = self._var_window_title.get().strip()
+            window_timeout_ms = max(100, _int(self._var_window_timeout_ms, 5000))
 
         # If/condition fields
         cond_type  = "var"
@@ -1238,12 +1613,52 @@ class StepDialog(tk.Toplevel):
             image_timeout_ms = max(100, _int(self._var_img_timeout, 5000))
             image_wait_for = self._var_img_wait_for.get() or "present"
 
+        # wait_pixel — reusa color_rgb/tolerance (do pixel_check) + image_timeout/wait_for/skip (do wait_image)
+        if action == "wait_pixel":
+            r = max(0, min(255, _int(self._var_color_r)))
+            g = max(0, min(255, _int(self._var_color_g)))
+            b = max(0, min(255, _int(self._var_color_b)))
+            color_rgb       = [r, g, b]
+            color_tolerance = max(0, min(255, _int(self._var_tolerance, 10)))
+            image_timeout_ms = max(50, _int(self._var_img_timeout, 5000))
+            image_wait_for   = self._var_img_wait_for.get() or "present"
+            image_skip_steps = max(0, _int(self._var_img_skip, 0))
+
         # call_macro — kind + target
         call_target_kind = "slot"
         call_target = "1"
         if action == "call_macro":
             call_target_kind = self._var_call_kind.get() or "slot"
             call_target = self._var_call_target.get().strip()
+
+        # http_request — URL/método/body/headers/auth/timeout + var_name pra resposta
+        http_url = ""
+        http_method = "POST"
+        http_body = ""
+        http_headers = ""
+        http_auth_kind = "none"
+        http_auth_value = ""
+        http_timeout_s = 10
+        http_save_status_var = ""
+        if action == "http_request":
+            http_url = self._var_http_url.get().strip()
+            http_method = (self._var_http_method.get() or "POST").upper()
+            # Body/Headers vêm dos Text widgets se existem (modo dialog aberto),
+            # senão das StringVars (cobre carregamento de step salvo sem abrir)
+            if self._http_body_widget:
+                http_body = self._http_body_widget.get("1.0", "end-1c")
+            else:
+                http_body = self._var_http_body.get()
+            if self._http_headers_widget:
+                http_headers = self._http_headers_widget.get("1.0", "end-1c")
+            else:
+                http_headers = self._var_http_headers.get()
+            http_auth_kind = self._var_http_auth_kind.get() or "none"
+            http_auth_value = self._var_http_auth_value.get()
+            http_timeout_s = max(1, _int(self._var_http_timeout, 10))
+            http_save_status_var = self._var_http_save_status.get().strip()
+            # var_name reaproveitado pra "salvar body em" — sobrescreve qualquer valor anterior
+            var_name = self._var_var_name.get().strip()
 
         self._result = MacroStep(
             action=action,
@@ -1287,6 +1702,16 @@ class StepDialog(tk.Toplevel):
             text_case_sensitive=text_case_sensitive,
             text_use_region=text_use_region,
             text_skip_steps=text_skip_steps,
+            window_title=window_title,
+            window_timeout_ms=window_timeout_ms,
+            http_url=http_url,
+            http_method=http_method,
+            http_body=http_body,
+            http_headers=http_headers,
+            http_auth_kind=http_auth_kind,
+            http_auth_value=http_auth_value,
+            http_timeout_s=http_timeout_s,
+            http_save_status_var=http_save_status_var,
         )
         self.destroy()
 

@@ -78,6 +78,18 @@ class MacroStep:
     text_case_sensitive: bool = False
     text_use_region: bool = False        # se False, OCR na tela inteira (mais lento)
     text_skip_steps: int = 0             # pular N steps se não encontrar (igual image_click)
+    # wait_window — espera até janela com título contendo `window_title` aparecer
+    window_title: str = ""
+    window_timeout_ms: int = 5000
+    # http_request — chama qualquer REST API. var_name (já existe) salva o body da resposta.
+    http_url: str = ""
+    http_method: str = "POST"          # GET | POST | PUT | DELETE | PATCH
+    http_body: str = ""                # aceita {variavel}; vazio = sem body
+    http_headers: str = ""             # multiline "Key: Value" por linha
+    http_auth_kind: str = "none"       # "none" | "bearer" | "basic"
+    http_auth_value: str = ""          # token (bearer) ou "user:pass" (basic)
+    http_timeout_s: int = 10
+    http_save_status_var: str = ""     # opcional — salva status HTTP (200, 404, -1=erro)
 
 
 @dataclass
