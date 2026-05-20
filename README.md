@@ -20,6 +20,7 @@ Automatizador "faz tudo" pra Windows. Clica, digita, espera, decide, encadeia a�
 - **⏺ Gravador** — aperta F10, faz suas ações, F10 de novo. Vira macro editável.
 - **✨ Hotstrings** — atalhos de texto que expandem em qualquer app (`:mail:` → seu email).
 - **📅 Agendador** — execute macros em horários específicos, com recorrência diária/semanal.
+- **🤖 IA Assistente** — descreva em português o macro que quer ("clicker que para se aparecer GAME OVER") e a IA gera os steps prontos. Funciona com Ollama local (grátis, offline) ou OpenAI/Groq/OpenRouter.
 - **📡 Monitoramento via Celular** — alertas e controle remoto via [ntfy.sh](https://ntfy.sh). Pareie via QR code e controle o PC do celular.
 - **🎯 Stop Conditions** — para automaticamente se uma imagem aparece / pixel bate cor / variável atinge valor.
 - **📚 Galeria de Exemplos** — templates prontos para jogos, trabalho, integrações e hotstrings.
@@ -168,6 +169,7 @@ Estrutura:
 
 | Versão | Destaques |
 |--------|-----------|
+| **v2.2** | 🤖 **IA Assistente** — chat que gera macros via Ollama local (grátis) ou OpenAI/Groq, step `ai_prompt` melhorado com erros distintos, mutex de instância única (Local namespace), refactor `core/ai_client.py` |
 | **v2.1** | Step `http_request`, step `wait_pixel`, 9 comandos ntfy novos, agendador, templates de jogos (GPO, Naramo) e integrações (Discord, Telegram), correções de estabilidade |
 | **v2.0** | Refactor modular core/ui, drag, wait_window, wait_image, call_macro, if/else, OCR click_text, stop conditions, gravador melhorado, monitoramento ntfy v2, agendador |
 | **v1.0** | AutoClick, AutoKeyboard, Macro básico, Hotstrings, Perfis |
