@@ -19,6 +19,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from core.ai_assistant import AIAssistant, parse_macro_steps
+from core.ai_client import list_ollama_models
 from core.macro_schema import MacroScript
 from core.paths import AI_CONFIG_PATH, PROFILES_DIR
 from ui.theme import T
@@ -62,18 +63,29 @@ class AIAssistantMixin:
                      values=["ollama", "openai", "openrouter", "groq", "custom"],
                      state="readonly", width=12, font=("Segoe UI", 9)
                      ).grid(row=0, column=1, padx=(0, 12))
+        # Quando troca backend: atualiza dropdown de modelos com sugestões
+        self.var_ai_backend.trace_add("write",
+            lambda *_: self._ai_model_combo.config(values=self._ai_default_models()))
 
         tk.Label(cfg_row, text="Modelo:", bg=T["bg"], fg=T["text"],
                  font=("Segoe UI", 9)
                  ).grid(row=0, column=2, sticky="w", padx=(0, 4))
-        tk.Entry(cfg_row, textvariable=self.var_ai_model, width=24,
-                 bg=T["card"], fg=T["text"], insertbackground=T["text"],
-                 font=("Consolas", 10), relief="flat", bd=4
-                 ).grid(row=0, column=3, padx=(0, 8))
+        self._ai_model_combo = ttk.Combobox(
+            cfg_row, textvariable=self.var_ai_model, width=22,
+            font=("Consolas", 10), values=self._ai_default_models())
+        self._ai_model_combo.grid(row=0, column=3, padx=(0, 4))
+
+        self._btn(cfg_row, "🔍", self._ai_detect_models,
+                   bg=T["card"], fg=T["text"], padx=6
+                   ).grid(row=0, column=4, padx=(0, 8))
 
         self._btn(cfg_row, "⚙ Avançado", self._ai_open_advanced,
                    bg=T["card"], fg=T["text"], padx=8
-                   ).grid(row=0, column=4, padx=(4, 0))
+                   ).grid(row=0, column=5, padx=(4, 0))
+
+        # Auto-detecta modelos Ollama no boot se backend padrão é ollama
+        if self.var_ai_backend.get() == "ollama":
+            self.after(500, self._ai_detect_models_silent)
 
         # ── Área de chat (Text scrollable) ───────────────────────
         chat_frame = tk.Frame(p, bg=T["bg"])
@@ -165,46 +177,80 @@ class AIAssistantMixin:
                          daemon=True).start()
 
     def _ai_call_thread(self, msg: str) -> None:
+        """Streaming: itera chunks e atualiza UI a cada um via after()."""
+        # 1. Limpa marca de "IA pensando" e imprime cabeçalho da resposta
+        self.after(0, self._ai_stream_start)
+
+        # 2. Pega snapshot do macro atual pra passar como contexto
+        current_macro = list(getattr(self, "_macro_steps", []) or [])
+
         try:
-            success, response = self._ai_assistant.chat(
+            for chunk in self._ai_assistant.chat_stream(
                 msg,
                 backend=self.var_ai_backend.get() or "ollama",
                 model=self.var_ai_model.get() or "llama3.2",
                 api_key=self.var_ai_api_key.get(),
                 base_url=self.var_ai_base_url.get(),
-                timeout_s=90,
+                timeout_s=120,
                 temperature=0.4,
-            )
+                current_macro=current_macro,
+            ):
+                self.after(0, self._ai_stream_chunk, chunk)
+        except RuntimeError as exc:
+            self.after(0, self._ai_stream_error, str(exc))
+            return
         except Exception as exc:
-            success, response = False, f"[ERRO interno: {exc}]"
-        # Volta pra thread UI pra renderizar
-        self.after(0, self._ai_render_response, success, response)
+            self.after(0, self._ai_stream_error, f"interno: {exc}")
+            return
 
-    def _ai_render_response(self, success: bool, response: str) -> None:
-        self._ai_busy = False
-        self._ai_send_btn.config(state="normal")
+        self.after(0, self._ai_stream_end)
 
-        # Remove o "🤖 IA pensando..." pela marca salva
+    def _ai_stream_start(self) -> None:
+        """Roda na UI thread: remove 'IA pensando...' e imprime cabeçalho."""
         if self._ai_thinking_mark:
             self._ai_chat.config(state="normal")
             self._ai_chat.delete(self._ai_thinking_mark, "end-1c")
             self._ai_chat.config(state="disabled")
             self._ai_thinking_mark = None
-
         self._ai_print("🤖 IA:\n", tag="user")
-        if not success:
-            self._ai_print(f"{response}\n\n", tag="error")
-            return
+        # Marca posição do início da resposta pra extrair full text depois
+        self._ai_chat.config(state="normal")
+        self._ai_response_start = self._ai_chat.index("end-1c")
+        self._ai_chat.config(state="disabled")
 
-        self._ai_print(f"{response}\n", tag="assistant")
+    def _ai_stream_chunk(self, chunk: str) -> None:
+        """Roda na UI thread: append chunk no chat."""
+        self._ai_print(chunk, tag="assistant")
 
-        # Tenta extrair steps. Se achar, oferece botão "Aplicar"
-        steps = parse_macro_steps(response)
+    def _ai_stream_error(self, msg: str) -> None:
+        """Roda na UI thread: marca erro e libera o botão."""
+        self._ai_busy = False
+        self._ai_send_btn.config(state="normal")
+        if self._ai_thinking_mark:
+            self._ai_chat.config(state="normal")
+            self._ai_chat.delete(self._ai_thinking_mark, "end-1c")
+            self._ai_chat.config(state="disabled")
+            self._ai_thinking_mark = None
+        self._ai_print(f"\n[ERRO: {msg}]\n\n", tag="error")
+
+    def _ai_stream_end(self) -> None:
+        """Roda na UI thread: stream completou, oferece botão de aplicar se tiver JSON."""
+        self._ai_busy = False
+        self._ai_send_btn.config(state="normal")
+        self._ai_print("\n", tag="assistant")
+
+        # Extrai full response do chat (texto entre marca de início e fim)
+        try:
+            full_text = self._ai_chat.get(self._ai_response_start, "end-1c")
+        except Exception:
+            full_text = ""
+
+        steps = parse_macro_steps(full_text)
         if steps:
             self._ai_offer_apply(steps)
         else:
-            self._ai_print("\n(Sem bloco JSON detectado. Refine o pedido pra "
-                           "a IA gerar o macro.)\n\n", tag="status")
+            self._ai_print("(Sem bloco JSON detectado nesta resposta.)\n\n",
+                            tag="status")
 
     def _ai_offer_apply(self, steps: list[dict]) -> None:
         """Insere botão 'Aplicar este macro' inline no chat."""
@@ -252,6 +298,64 @@ class AIAssistantMixin:
         self._ai_chat.delete("1.0", "end")
         self._ai_chat.config(state="disabled")
         self._ai_print("💡 Conversa limpa. Comece de novo.\n\n", tag="status")
+
+    # ─────────────────────────────────────────────────────────────
+    # MODELOS (detecção via API e sugestões padrão)
+    # ─────────────────────────────────────────────────────────────
+    def _ai_default_models(self) -> list[str]:
+        """Sugestões padrão por backend (mostra como fallback)."""
+        b = self.var_ai_backend.get() or "ollama"
+        return {
+            "ollama":     ["llama3.2", "llama3.2-vision", "llama3.1", "mistral",
+                           "gemma2", "phi3", "qwen2.5"],
+            "openai":     ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
+            "openrouter": ["mistralai/mistral-7b-instruct",
+                           "google/gemma-7b-it",
+                           "meta-llama/llama-3-8b-instruct"],
+            "groq":       ["llama3-8b-8192", "llama3-70b-8192",
+                           "mixtral-8x7b-32768", "gemma-7b-it"],
+            "custom":     [],
+        }.get(b, [])
+
+    def _ai_detect_models(self) -> None:
+        """Botão 🔍: lista modelos Ollama instalados e popula o dropdown."""
+        b = self.var_ai_backend.get() or "ollama"
+        if b != "ollama":
+            self._ai_print(f"💡 Detecção automática só funciona com Ollama. "
+                            f"Backend atual: {b}\n", tag="status")
+            self._ai_model_combo["values"] = self._ai_default_models()
+            return
+
+        self._ai_print("🔍 Procurando modelos Ollama instalados...\n", tag="status")
+        # Roda em thread pra não travar (3s timeout)
+        threading.Thread(target=self._ai_detect_models_thread,
+                          daemon=True).start()
+
+    def _ai_detect_models_silent(self) -> None:
+        """Mesma coisa que _ai_detect_models mas sem mensagem no chat (auto-boot)."""
+        if self.var_ai_backend.get() != "ollama":
+            return
+        threading.Thread(target=self._ai_detect_models_thread,
+                          args=(True,), daemon=True).start()
+
+    def _ai_detect_models_thread(self, silent: bool = False) -> None:
+        models = list_ollama_models(self.var_ai_base_url.get())
+        self.after(0, self._ai_detect_models_done, models, silent)
+
+    def _ai_detect_models_done(self, models: list[str], silent: bool) -> None:
+        if models:
+            self._ai_model_combo["values"] = models
+            # Se modelo atual não está na lista, seleciona o primeiro
+            if self.var_ai_model.get() not in models:
+                self.var_ai_model.set(models[0])
+            if not silent:
+                self._ai_print(f"✓ {len(models)} modelo(s) Ollama: "
+                                f"{', '.join(models)}\n\n", tag="status")
+        else:
+            if not silent:
+                self._ai_print("✗ Ollama nao respondeu (rodando em localhost:11434?). "
+                                "Usando lista padrao de sugestoes.\n\n", tag="status")
+            self._ai_model_combo["values"] = self._ai_default_models()
 
     # ─────────────────────────────────────────────────────────────
     # CONFIG (modal avançado + persistência)

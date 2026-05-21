@@ -1101,8 +1101,8 @@ class SequentialRunner:
         """Envia prompt a uma LLM (Ollama local ou API OpenAI-compatível).
 
         Interpola {var} no prompt e system prompt. Salva resposta em var_name.
+        Se ai_vision_enabled, captura região (x,y,ocr_w,ocr_h) e envia como imagem.
         Em erro, salva "[ERRO: ...]" na variável — não para o macro.
-        Lógica HTTP centralizada em core.ai_client.call_llm.
         """
         prompt = self._resolve_var_value(step.ai_prompt_text or "", ctx)
         if not prompt:
@@ -1114,6 +1114,24 @@ class SequentialRunner:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
+        # ── Vision: captura região da tela e codifica como PNG base64 ────
+        images: list[str] | None = None
+        if step.ai_vision_enabled and step.x is not None and step.y is not None \
+                and step.ocr_w > 0 and step.ocr_h > 0:
+            try:
+                import base64
+                import io
+                img = self._driver.capture_region(
+                    step.x, step.y, step.ocr_w, step.ocr_h)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                images = [base64.b64encode(buf.getvalue()).decode("ascii")]
+            except Exception as exc:
+                if step.var_name:
+                    ctx.variables[step.var_name] = f"[ERRO: captura de tela falhou: {exc}]"
+                    self._notify_var(step.var_name, ctx.variables[step.var_name])
+                return
+
         from core.ai_client import call_llm
         backend = step.ai_backend or "ollama"
         success, text = call_llm(
@@ -1124,6 +1142,7 @@ class SequentialRunner:
             base_url=step.ai_base_url or "",
             timeout_s=step.ai_timeout_s or 30,
             temperature=step.ai_temperature,
+            images=images,
         )
 
         if step.var_name:

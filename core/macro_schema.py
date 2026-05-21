@@ -99,6 +99,10 @@ class MacroStep:
     ai_base_url: str = ""              # URL base custom (Ollama: http://localhost:11434)
     ai_api_key: str = ""               # API key (vazio pra Ollama local)
     ai_timeout_s: int = 30             # timeout em segundos
+    # Vision (multimodal): se True, captura região definida por x/y/ocr_w/ocr_h
+    # e envia como imagem junto com o prompt. Requer modelo que suporte vision
+    # (ex: llama3.2-vision no Ollama, gpt-4o-mini em OpenAI).
+    ai_vision_enabled: bool = False
 
 
 @dataclass

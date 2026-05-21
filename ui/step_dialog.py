@@ -191,6 +191,8 @@ def step_to_params_str(step: MacroStep) -> str:
         if len(step.ai_prompt_text or "") > 28:
             preview += "…"
         out = f"[{backend}/{model}]  \"{preview}\""
+        if getattr(step, "ai_vision_enabled", False):
+            out += "  👁"
         if step.var_name:
             out += f"  →{{{step.var_name}}}"
         return out
@@ -374,6 +376,8 @@ class StepDialog(tk.Toplevel):
             step and step.action == "ai_prompt"
             and (step.ai_system_prompt or step.ai_api_key or step.ai_base_url)
         ))
+        self._var_ai_vision_enabled = tk.BooleanVar(
+            value=bool(step and getattr(step, "ai_vision_enabled", False)))
         self._ai_prompt_widget: tk.Text | None = None
         self._ai_system_widget: tk.Text | None = None
 
@@ -1075,7 +1079,8 @@ class StepDialog(tk.Toplevel):
 
             lbl("Modelo:", 1)
             _model_suggestions = {
-                "ollama":     ["llama3.2", "llama3.1", "mistral", "gemma2", "phi3", "qwen2.5"],
+                "ollama":     ["llama3.2", "llama3.2-vision", "llama3.1",
+                               "mistral", "gemma2", "phi3", "qwen2.5"],
                 "openai":     ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
                 "openrouter": ["mistralai/mistral-7b-instruct", "google/gemma-7b-it",
                                "meta-llama/llama-3-8b-instruct"],
@@ -1087,10 +1092,23 @@ class StepDialog(tk.Toplevel):
                              "openrouter": "mistralai/mistral-7b-instruct",
                              "groq": "llama3-8b-8192", "custom": ""}
                 self._var_ai_model.set(_defaults.get(backend, ""))
-            ttk.Combobox(f, textvariable=self._var_ai_model,
+            model_combo = ttk.Combobox(f, textvariable=self._var_ai_model,
                          values=_model_suggestions.get(backend, []),
-                         width=30, font=("Consolas", 10)
-                         ).grid(row=1, column=1, columnspan=2, sticky="w")
+                         width=26, font=("Consolas", 10))
+            model_combo.grid(row=1, column=1, sticky="w")
+
+            # Botão 🔍 detecta modelos Ollama instalados
+            def _detect_ollama_models():
+                if (self._var_ai_backend.get() or "ollama") != "ollama":
+                    return
+                from core.ai_client import list_ollama_models
+                models = list_ollama_models(self._var_ai_base_url.get())
+                if models:
+                    model_combo["values"] = models
+                    if self._var_ai_model.get() not in models:
+                        self._var_ai_model.set(models[0])
+            self._btn(f, "🔍", _detect_ollama_models, T["card"], fg=T["text"],
+                       padx=4, pady=2).grid(row=1, column=2, sticky="w", padx=(4, 0))
 
             lbl("Prompt:", 2)
             prompt_text = tk.Text(f, height=5, width=44, bg=T["card"], fg=T["text"],
@@ -1108,6 +1126,36 @@ class StepDialog(tk.Toplevel):
             tk.Entry(f, textvariable=self._var_var_name, width=20, bg=T["card"],
                      fg=T["text"], insertbackground=T["text"], font=("Consolas", 11),
                      relief="flat", bd=4).grid(row=4, column=1, sticky="w")
+
+            # ── VISION (multimodal): captura região da tela e envia como imagem ──
+            tk.Checkbutton(f, text="👁 Incluir screenshot de uma regiao da tela (vision)",
+                           variable=self._var_ai_vision_enabled,
+                           command=self._refresh_fields,
+                           bg=T["bg"], fg=T["text"], selectcolor=T.get("sel", "#7a1a1a"),
+                           activebackground=T["bg"], font=("Segoe UI", 9)
+                           ).grid(row=4, column=2, columnspan=2, sticky="w", padx=(20, 0))
+
+            if self._var_ai_vision_enabled.get():
+                # Reusa _capture_ocr_region (já existe) — preenche x/y/ocr_w/ocr_h
+                self._btn(f, "📐 Selecionar Regiao", self._capture_ocr_region,
+                           T["accent2"], padx=8, pady=3
+                           ).grid(row=4, column=4, sticky="w", padx=(8, 0))
+                _region_label = "Regiao: "
+                if (self._var_x.get() and self._var_y.get()
+                        and self._var_ocr_w.get() and self._var_ocr_h.get()):
+                    _region_label += (f"({self._var_x.get()},{self._var_y.get()}) "
+                                       f"{self._var_ocr_w.get()}x{self._var_ocr_h.get()}")
+                else:
+                    _region_label += "(nao definida)"
+                tk.Label(f, text=_region_label,
+                         bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                         ).grid(row=4, column=5, sticky="w", padx=(6, 0))
+                tk.Label(f, text="Use modelo com suporte a vision: "
+                                  "llama3.2-vision (Ollama) ou gpt-4o-mini (OpenAI).",
+                         bg=T["bg"], fg=T["accent2"], font=("Segoe UI", 8, "italic"),
+                         wraplength=460, justify="left"
+                         ).grid(row=4, column=1, columnspan=5, sticky="w",
+                                 padx=(0, 0), pady=(22, 0))
 
             tk.Checkbutton(f, text="🔧 Avancado (system prompt, temperatura, API key, URL base)",
                            variable=self._var_ai_show_advanced,
@@ -1764,15 +1812,16 @@ class StepDialog(tk.Toplevel):
             call_target_kind = self._var_call_kind.get() or "slot"
             call_target = self._var_call_target.get().strip()
 
-        # ai_prompt — backend/model/prompts/temperature/key/url/timeout
-        ai_backend       = "ollama"
-        ai_model         = ""
-        ai_prompt_text   = ""
-        ai_system_prompt = ""
-        ai_temperature   = 0.7
-        ai_base_url      = ""
-        ai_api_key       = ""
-        ai_timeout_s     = 30
+        # ai_prompt — backend/model/prompts/temperature/key/url/timeout/vision
+        ai_backend         = "ollama"
+        ai_model           = ""
+        ai_prompt_text     = ""
+        ai_system_prompt   = ""
+        ai_temperature     = 0.7
+        ai_base_url        = ""
+        ai_api_key         = ""
+        ai_timeout_s       = 30
+        ai_vision_enabled  = False
         if action == "ai_prompt":
             ai_backend   = self._var_ai_backend.get() or "ollama"
             ai_model     = self._var_ai_model.get().strip()
@@ -1787,7 +1836,13 @@ class StepDialog(tk.Toplevel):
             ai_base_url  = self._var_ai_base_url.get().strip()
             ai_api_key   = self._var_ai_api_key.get()
             ai_timeout_s = max(5, _int(self._var_ai_timeout, 30))
+            ai_vision_enabled = bool(self._var_ai_vision_enabled.get())
             var_name     = self._var_var_name.get().strip()
+            # Vision: x/y/ocr_w/ocr_h vêm das vars compartilhadas (já populadas
+            # via _capture_ocr_region quando usuário arrasta a região)
+            if ai_vision_enabled:
+                ocr_w = max(0, _int(self._var_ocr_w))
+                ocr_h = max(0, _int(self._var_ocr_h))
 
         # http_request — URL/método/body/headers/auth/timeout + var_name pra resposta
         http_url = ""
@@ -1878,6 +1933,7 @@ class StepDialog(tk.Toplevel):
             ai_base_url=ai_base_url,
             ai_api_key=ai_api_key,
             ai_timeout_s=ai_timeout_s,
+            ai_vision_enabled=ai_vision_enabled,
         )
         self.destroy()
 
