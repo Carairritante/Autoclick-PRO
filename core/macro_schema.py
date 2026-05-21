@@ -103,6 +103,12 @@ class MacroStep:
     # e envia como imagem junto com o prompt. Requer modelo que suporte vision
     # (ex: llama3.2-vision no Ollama, gpt-4o-mini em OpenAI).
     ai_vision_enabled: bool = False
+    # fishing_pd_track — pesca com PD control. Reusa x,y,ocr_w,ocr_h pra região,
+    # color_rgb pra cor guia (azul do medidor), button pra qual segurar.
+    fish_player_color: list | None = None    # cor do marcador do jogador (peixe)
+    fish_target_color: list | None = None    # cor do alvo movel (zona alvo)
+    fish_kp: float = 0.3                     # ganho proporcional do PD
+    fish_kd: float = 0.15                    # ganho derivativo do PD
 
 
 @dataclass

@@ -26,6 +26,8 @@ ACTION_LABELS: dict[str, str] = {
     "click":          "🖱 Click",
     "double_click":   "🖱🖱 Double Click",
     "right_click":    "🖱 Right Click",
+    "mouse_down":     "🖱⬇ Mouse Down (segurar)",
+    "mouse_up":       "🖱⬆ Mouse Up (soltar)",
     "move":           "➡ Mover",
     "drag":           "↔ Arrastar",
     "type":           "⌨ Digitar",
@@ -45,6 +47,7 @@ ACTION_LABELS: dict[str, str] = {
     "call_macro":     "📞 Chamar Macro",
     "http_request":   "🌐 HTTP Request",
     "ai_prompt":      "🤖 Prompt IA",
+    "fishing_pd_track": "🎣 Pesca PD Tracking",
     "if":             "🔀 If (condição)",
     "else":           "↪ Else",
     "endif":          "⏹ EndIf",
@@ -62,6 +65,8 @@ ACTION_DESCRIPTIONS: dict[str, str] = {
     "click":        "Clica uma vez num ponto da tela. Use 'Capturar' pra pegar a posição do cursor.",
     "double_click": "Dois cliques rápidos no mesmo ponto. Útil pra abrir arquivos/apps.",
     "right_click":  "Clica com o botão direito — abre menus de contexto.",
+    "mouse_down":   "Pressiona e SEGURA o botão do mouse (não solta). Combine com mouse_up depois — útil pra hold/release de pesca, charge attacks, etc.",
+    "mouse_up":     "Solta o botão do mouse previamente segurado com mouse_down.",
     "move":         "Só move o cursor pro ponto, sem clicar.",
     "drag":         "Pressiona em A, segura, arrasta até B e solta. Funciona em Roblox/jogos.",
     "type":         "Digita um texto. Use {ENTER}, {TAB}, {F1}…{F12} pra teclas especiais.",
@@ -81,6 +86,7 @@ ACTION_DESCRIPTIONS: dict[str, str] = {
     "call_macro":   "Executa outro macro inteiro (slot 1/2/3 ou arquivo .json). Reusa lógica.",
     "http_request": "Chama uma API REST (Discord webhook, Telegram bot, Home Assistant, etc). Salva a resposta numa variável.",
     "ai_prompt":    "Manda um prompt pra uma IA (Ollama local grátis, ou OpenAI/Groq/OpenRouter). Salva a resposta numa variável. Aceita {variavel} no prompt.",
+    "fishing_pd_track": "Pesca avancada com PD control: rastreia marcador movel via 3 cores (guia + peixe + alvo) e segura/solta o mouse pra manter alinhado. Pra GPO Roblox e jogos similares.",
     "if":           "Inicia bloco condicional. Steps até Else/EndIf rodam só se a condição der true.",
     "else":         "Marca o bloco que roda se o If for falso. Precisa estar entre If e EndIf.",
     "endif":        "Fecha o bloco If/Else.",
@@ -112,6 +118,11 @@ def step_to_params_str(step: MacroStep) -> str:
         if a != "move":
             return f"{coord} {step.button}"
         return coord
+    elif a == "mouse_down":
+        coord = f"({step.x}, {step.y}) " if step.x is not None else ""
+        return f"{coord}{step.button} ⬇ segura"
+    elif a == "mouse_up":
+        return f"{step.button} ⬆ solta"
     elif a == "drag":
         src = f"({step.x},{step.y})" if step.x is not None else "(?)"
         dst = f"({step.x2},{step.y2})" if step.x2 is not None else "(?)"
@@ -184,6 +195,10 @@ def step_to_params_str(step: MacroStep) -> str:
         if step.var_name:
             extras.append(f"→{{{step.var_name}}}")
         return f"{method} {url}" + (f"  [{' '.join(extras)}]" if extras else "")
+    elif a == "fishing_pd_track":
+        guide = f"RGB{tuple(step.color_rgb)}" if step.color_rgb else "RGB(?)"
+        region = f"{step.ocr_w}x{step.ocr_h}" if step.ocr_w and step.ocr_h else "?"
+        return f"({step.x},{step.y}) {region}  guia={guide}  kp={step.fish_kp} kd={step.fish_kd}"
     elif a == "ai_prompt":
         backend = step.ai_backend or "ollama"
         model   = step.ai_model or "?"
@@ -380,6 +395,17 @@ class StepDialog(tk.Toplevel):
             value=bool(step and getattr(step, "ai_vision_enabled", False)))
         self._ai_prompt_widget: tk.Text | None = None
         self._ai_system_widget: tk.Text | None = None
+        # fishing_pd_track — cores do player e target (RGB sets separados)
+        _pc = step.fish_player_color if step and step.fish_player_color else [255, 255, 255]
+        _tc = step.fish_target_color if step and step.fish_target_color else [25, 25, 25]
+        self._var_fish_player_r = tk.StringVar(value=str(_pc[0]))
+        self._var_fish_player_g = tk.StringVar(value=str(_pc[1]))
+        self._var_fish_player_b = tk.StringVar(value=str(_pc[2]))
+        self._var_fish_target_r = tk.StringVar(value=str(_tc[0]))
+        self._var_fish_target_g = tk.StringVar(value=str(_tc[1]))
+        self._var_fish_target_b = tk.StringVar(value=str(_tc[2]))
+        self._var_fish_kp = tk.StringVar(value=str(step.fish_kp) if step else "0.3")
+        self._var_fish_kd = tk.StringVar(value=str(step.fish_kd) if step else "0.15")
 
         if step and step.text:
             self._var_text.set(step.text)
@@ -1067,6 +1093,28 @@ class StepDialog(tk.Toplevel):
             entry(self._var_delay, 14)
             return
 
+        if action in ("mouse_down", "mouse_up"):
+            tk.Label(f, text=ACTION_DESCRIPTIONS[action], bg=T["bg"], fg=T["accent2"],
+                     font=("Segoe UI", 9), wraplength=440, justify="left"
+                     ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(2, 6))
+            if action == "mouse_down":
+                lbl("X (opc):", 1); entry(self._var_x, 1)
+                lbl("Y (opc):", 2); entry(self._var_y, 2)
+                self._btn(f, "📍 Capturar (3s)", self._capture_xy,
+                           T["accent2"], padx=6, pady=3
+                           ).grid(row=1, column=2, rowspan=2, padx=8)
+                tk.Label(f, text="Vazio = pressiona na posicao atual do cursor.",
+                         bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                         ).grid(row=3, column=0, columnspan=3, sticky="w")
+            lbl("Botao:", 4)
+            ttk.Combobox(f, textvariable=self._var_button,
+                         values=["left", "right", "middle"], state="readonly",
+                         width=10, font=("Segoe UI", 10)
+                         ).grid(row=4, column=1, sticky="w")
+            lbl("Delay pre-step (ms):", 10)
+            entry(self._var_delay, 10)
+            return
+
         if action == "ai_prompt":
             lbl("Backend:", 0)
             ttk.Combobox(f, textvariable=self._var_ai_backend,
@@ -1215,6 +1263,81 @@ class StepDialog(tk.Toplevel):
 
             lbl("Delay pre-step (ms):", 15)
             entry(self._var_delay, 15)
+            return
+
+        if action == "fishing_pd_track":
+            # ── Região do medidor ────────────────────────────────────
+            self._btn(f, "📐 Selecionar Regiao do Medidor", self._capture_ocr_region,
+                       T["accent2"], padx=8, pady=4
+                       ).grid(row=0, column=0, columnspan=3, sticky="w", pady=4)
+            lbl("X / Y:", 1)
+            xy_frame = tk.Frame(f, bg=T["bg"])
+            xy_frame.grid(row=1, column=1, columnspan=2, sticky="w")
+            for v, w in ((self._var_x, 6), (self._var_y, 6)):
+                tk.Entry(xy_frame, textvariable=v, width=w, bg=T["card"], fg=T["text"],
+                         insertbackground=T["text"], font=("Consolas", 11),
+                         justify="center", relief="flat", bd=4).pack(side="left", padx=(0, 4))
+            lbl("Largura x Altura:", 2)
+            wh_frame = tk.Frame(f, bg=T["bg"])
+            wh_frame.grid(row=2, column=1, columnspan=2, sticky="w")
+            for v, w in ((self._var_ocr_w, 6), (self._var_ocr_h, 6)):
+                tk.Entry(wh_frame, textvariable=v, width=w, bg=T["card"], fg=T["text"],
+                         insertbackground=T["text"], font=("Consolas", 11),
+                         justify="center", relief="flat", bd=4).pack(side="left", padx=(0, 4))
+
+            # ── 3 cores: guia, player, target ────────────────────────
+            def _color_row(label_text, vr, vg, vb, row):
+                lbl(label_text, row)
+                cf = tk.Frame(f, bg=T["bg"])
+                cf.grid(row=row, column=1, columnspan=2, sticky="w")
+                for v in (vr, vg, vb):
+                    tk.Entry(cf, textvariable=v, width=5, bg=T["card"], fg=T["text"],
+                             insertbackground=T["text"], font=("Consolas", 11),
+                             justify="center", relief="flat", bd=4
+                             ).pack(side="left", padx=(0, 4))
+                # Preview da cor (label colorido)
+                try:
+                    rr = max(0, min(255, int(vr.get() or 0)))
+                    gg = max(0, min(255, int(vg.get() or 0)))
+                    bb = max(0, min(255, int(vb.get() or 0)))
+                    hex_color = f"#{rr:02x}{gg:02x}{bb:02x}"
+                except ValueError:
+                    hex_color = "#000000"
+                tk.Label(cf, text="    ", bg=hex_color, width=4, relief="solid", bd=1
+                         ).pack(side="left", padx=(6, 0))
+
+            _color_row("Cor GUIA  (R G B):",   self._var_color_r,  self._var_color_g,  self._var_color_b,  3)
+            _color_row("Cor PEIXE (R G B):",   self._var_fish_player_r, self._var_fish_player_g, self._var_fish_player_b, 4)
+            _color_row("Cor ALVO  (R G B):",   self._var_fish_target_r, self._var_fish_target_g, self._var_fish_target_b, 5)
+
+            self._btn(f, "📷 Capturar Guia",   self._capture_color, T["accent2"], padx=6, pady=2
+                       ).grid(row=3, column=3, sticky="w", padx=(8, 0))
+
+            lbl("Tolerancia cor:", 6); entry(self._var_tolerance, 6, w=5)
+
+            lbl("kp (proporcional):", 7); entry(self._var_fish_kp, 7, w=6)
+            lbl("kd (derivativo):", 8);   entry(self._var_fish_kd, 8, w=6)
+
+            lbl("Botao do mouse:", 9)
+            ttk.Combobox(f, textvariable=self._var_button,
+                         values=["left", "right"], state="readonly",
+                         width=10, font=("Segoe UI", 10)
+                         ).grid(row=9, column=1, sticky="w")
+
+            lbl("Timeout (ms):", 10); entry(self._var_img_timeout, 10)
+
+            tk.Label(f, text="Defaults GPO: guia=RGB(85,170,255), peixe=(255,255,255), alvo=(25,25,25).",
+                     bg=T["bg"], fg=T["accent2"], font=("Segoe UI", 8, "italic"),
+                     wraplength=460, justify="left"
+                     ).grid(row=11, column=0, columnspan=4, sticky="w", pady=(6, 0))
+            tk.Label(f, text="Capture a regiao do medidor inteiro. Cor GUIA = coluna fixa (azul). "
+                              "PEIXE = marcador que voce controla. ALVO = barra que se move.",
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8),
+                     wraplength=460, justify="left"
+                     ).grid(row=12, column=0, columnspan=4, sticky="w", pady=(2, 0))
+
+            lbl("Delay pre-step (ms):", 14)
+            entry(self._var_delay, 14)
             return
 
         if action == "set_var":
@@ -1812,6 +1935,38 @@ class StepDialog(tk.Toplevel):
             call_target_kind = self._var_call_kind.get() or "slot"
             call_target = self._var_call_target.get().strip()
 
+        # fishing_pd_track — região + 3 cores + PD params
+        fish_player_color = None
+        fish_target_color = None
+        fish_kp = 0.3
+        fish_kd = 0.15
+        if action == "fishing_pd_track":
+            # Player/target colors via 3 entries cada
+            def _rgb(vr, vg, vb):
+                return [max(0, min(255, _int(vr))),
+                        max(0, min(255, _int(vg))),
+                        max(0, min(255, _int(vb)))]
+            fish_player_color = _rgb(self._var_fish_player_r,
+                                      self._var_fish_player_g,
+                                      self._var_fish_player_b)
+            fish_target_color = _rgb(self._var_fish_target_r,
+                                      self._var_fish_target_g,
+                                      self._var_fish_target_b)
+            try:
+                fish_kp = max(0.01, float(self._var_fish_kp.get() or "0.3"))
+            except ValueError:
+                fish_kp = 0.3
+            try:
+                fish_kd = max(0.0, float(self._var_fish_kd.get() or "0.15"))
+            except ValueError:
+                fish_kd = 0.15
+            # Reusa color_rgb (guia), ocr_w/ocr_h (regiao), color_tolerance, image_timeout_ms
+            color_rgb = _rgb(self._var_color_r, self._var_color_g, self._var_color_b)
+            color_tolerance = max(0, min(255, _int(self._var_tolerance, 5)))
+            ocr_w = max(0, _int(self._var_ocr_w))
+            ocr_h = max(0, _int(self._var_ocr_h))
+            image_timeout_ms = max(1000, _int(self._var_img_timeout, 60000))
+
         # ai_prompt — backend/model/prompts/temperature/key/url/timeout/vision
         ai_backend         = "ollama"
         ai_model           = ""
@@ -1934,6 +2089,10 @@ class StepDialog(tk.Toplevel):
             ai_api_key=ai_api_key,
             ai_timeout_s=ai_timeout_s,
             ai_vision_enabled=ai_vision_enabled,
+            fish_player_color=fish_player_color,
+            fish_target_color=fish_target_color,
+            fish_kp=fish_kp,
+            fish_kd=fish_kd,
         )
         self.destroy()
 

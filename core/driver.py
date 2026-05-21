@@ -232,6 +232,28 @@ class WindowsDriver:
             self._send_mouse(down)
             self._send_mouse(up)
 
+    def perform_mouse_down(
+        self,
+        x: int | None = None,
+        y: int | None = None,
+        button: str = "left",
+    ) -> None:
+        """Move o cursor (se x/y) e PRESSIONA o botão sem soltar.
+
+        Combine com perform_mouse_up pra simular hold/release de minigames
+        (pesca de jogos com barra, charge attacks, drag manual, etc).
+        """
+        if x is not None and y is not None:
+            nx, ny = self._normalize_coords(x, y)
+            self._send_mouse(_MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_MOVE, dx=nx, dy=ny)
+        down, _ = _BTN_SINPUT.get(button, _BTN_SINPUT["left"])
+        self._send_mouse(down)
+
+    def perform_mouse_up(self, button: str = "left") -> None:
+        """Solta o botão previamente pressionado por perform_mouse_down."""
+        _, up = _BTN_SINPUT.get(button, _BTN_SINPUT["left"])
+        self._send_mouse(up)
+
     def perform_scroll(
         self,
         x: int | None = None,

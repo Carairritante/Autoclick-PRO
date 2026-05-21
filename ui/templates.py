@@ -126,63 +126,54 @@ TEMPLATES: list[Template] = [
     ),
     Template(
         id="gpo_fishing_auto_tap",
-        name="Pesca GPO — Auto Tap",
+        name="Pesca GPO — PD Tracking",
         category=CAT_GAMES,
         icon="🎣",
         description=(
-            "Loop completo de pesca no Grand Piece Online: lança a vara, "
-            "aguarda mordida e rola no minigame com tap rápido em E."
+            "Pesca no Grand Piece Online via PD control: rastreia o marcador "
+            "(peixe branco) vs alvo movel (barra cinza) e segura/solta o mouse "
+            "pra manter alinhado. Igual ao macro dedicado do GPO."
         ),
         type="macro",
         warning=(
-            "Antes de iniciar: equipe a vara, posicione o personagem perto da água "
-            "e clique no jogo.\n"
-            "Tecla de interação: E (padrão). Se usar outra, edite todos os key_press.\n"
-            "Ajuste o 'wait 9000ms' se o peixe demorar mais/menos pra morder.\n"
-            "Macros no Roblox violam os Termos de Servico — use por sua conta e risco."
+            "Como funciona o minigame GPO: o medidor tem uma coluna AZUL fixa "
+            "que marca a area de pesca. Dentro dela, um PEIXE BRANCO sobe quando "
+            "voce segura o mouse e cai quando solta. Voce deve manter o peixe "
+            "alinhado com a BARRA CINZA que se move dentro do medidor.\n\n"
+            "ANTES DE RODAR:\n"
+            "1) Entre numa pescada (lance a vara e espere a mordida)\n"
+            "2) Edite o step 'fishing_pd_track' e clique 'Selecionar Regiao do "
+            "Medidor' — arraste cobrindo TODO o medidor vertical (coluna azul + "
+            "marcadores).\n"
+            "3) As 3 cores ja vem com os defaults do GPO:\n"
+            "   - Guia (coluna azul): RGB(85, 170, 255)\n"
+            "   - Peixe (marker branco): RGB(255, 255, 255)\n"
+            "   - Alvo (barra cinza): RGB(25, 25, 25)\n"
+            "   Se cor diferir no seu jogo, ajuste no editor.\n\n"
+            "VOCE deve lancar a vara manualmente. O macro detecta quando a coluna "
+            "azul aparece (= minigame ativo), faz PD control, e sai quando a "
+            "coluna azul some (= peixe pego/perdido). Roda em loop infinito.\n\n"
+            "Macros no Roblox violam os ToS — use por sua conta e risco."
         ),
         config={
             "macro_steps": [
-                # ── Lanca a vara (E) ─────────────────────────────
-                {"action": "key_press", "key": "e", "delay_ms": 500},
-                # ── Aguarda mordida (media 5-12s no GPO) ─────────
-                {"action": "wait", "delay_ms": 9000},
-                # ── Minigame de recolher ──────────────────────────
-                # 28 taps rapidos em E com 100ms de intervalo cada.
-                # Cada tap faz o marcador reagir; oscilacao continua
-                # mantem o peixe dentro da zona azul durante ~3s.
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                {"action": "key_press", "key": "e", "delay_ms": 100},
-                # ── Aguarda animacao de loot ──────────────────────
-                {"action": "wait", "delay_ms": 2000},
-                # ── Fecha loot / inicia proxima pescada ──────────
-                {"action": "key_press", "key": "e", "delay_ms": 300},
+                # ── PD tracking do minigame de pesca ─────────────
+                # Regiao default: vai precisar ajustar via 'Selecionar Regiao'
+                # Defaults GPO: coluna azul + peixe branco + barra cinza
+                {"action": "fishing_pd_track",
+                 "x": 1700, "y": 300,
+                 "ocr_w": 50, "ocr_h": 400,
+                 "color_rgb": [85, 170, 255],        # guia (coluna azul)
+                 "fish_player_color": [255, 255, 255], # peixe (branco)
+                 "fish_target_color": [25, 25, 25],   # alvo (cinza escuro)
+                 "color_tolerance": 5,
+                 "fish_kp": 0.3,
+                 "fish_kd": 0.15,
+                 "button": "left",
+                 "image_timeout_ms": 60000,           # 60s max por pescada
+                 "delay_ms": 0},
+                # Aguarda 3s entre pescadas (animacao de loot + recasting)
+                {"action": "wait", "delay_ms": 3000},
             ],
             "macro_speed": "1",
             "rep_mode": "infinite",
@@ -190,53 +181,56 @@ TEMPLATES: list[Template] = [
     ),
     Template(
         id="naramo_manutencao_usina",
-        name="Naramo — Manutencao Usina",
+        name="Naramo — Skill Check E/Q",
         category=CAT_GAMES,
         icon="⚛",
         description=(
-            "Automatiza o ciclo de manutencao na usina nuclear do Naramo: "
-            "repara maquinas quebradas (minigame E/Q) e aguarda proximo defeito."
+            "Pressiona E ou Q automaticamente quando a barra vermelha entra na zona "
+            "azul. Voce segura o botao do mouse manualmente — o macro so cuida do timing."
         ),
         type="macro",
         warning=(
-            "Funcao: Tecnico de Manutencao (Plant Maintenance).\n"
-            "Use o gravador (F10) pra capturar o click na maquina quebrada — "
-            "substitua os placeholders x=960, y=600.\n"
-            "O minigame alterna E e Q; cada par repara 25HP. "
-            "Maquinas tem 100HP, entao 4 pares = reparo completo.\n"
-            "Ajuste o 'wait 120000ms' (2 min) para o intervalo de break real do servidor."
+            "ANTES DE RODAR — entre no minigame uma vez e capture 2 cores no editor (F10):\n\n"
+            "1) wait_pixel (step 1): clique 'Capturar Cor' apontando pro CENTRO da zona azul\n"
+            "   no momento em que a barra vermelha esta passando por la — pega a cor\n"
+            "   vermelha (algo como RGB ~220,30,30).\n\n"
+            "2) if pixel (step 2): clique 'Capturar Cor' apontando pra um pixel\n"
+            "   DENTRO do glifo da letra Q (de preferencia uma area que so existe em Q,\n"
+            "   nao em E — exemplo: o 'rabinho' inferior direito de Q).\n\n"
+            "Voce segura o mouse esquerdo o tempo todo do minigame. O macro fica em loop\n"
+            "esperando barras chegarem e pressionando a tecla correta."
         ),
         config={
             "macro_steps": [
-                # ── Ir ate a maquina quebrada ─────────────────────
-                # Substitua x/y pelo clique real na maquina defeituosa
-                {"action": "click", "x": 960, "y": 600,
-                 "button": "left", "delay_ms": 500},
-                # ── Aguarda UI de reparo abrir ─────────────────────
-                {"action": "wait", "delay_ms": 800},
-                # ── Minigame de reparo: alterna E e Q ────────────
-                # Cada par (E+Q) repara 25HP. 6 pares = margem de
-                # seguranca para maquinas com HP parcial.
-                {"action": "key_press", "key": "e", "delay_ms": 150},
-                {"action": "key_press", "key": "q", "delay_ms": 150},
-                {"action": "key_press", "key": "e", "delay_ms": 150},
-                {"action": "key_press", "key": "q", "delay_ms": 150},
-                {"action": "key_press", "key": "e", "delay_ms": 150},
-                {"action": "key_press", "key": "q", "delay_ms": 150},
-                {"action": "key_press", "key": "e", "delay_ms": 150},
-                {"action": "key_press", "key": "q", "delay_ms": 150},
-                {"action": "key_press", "key": "e", "delay_ms": 150},
-                {"action": "key_press", "key": "q", "delay_ms": 150},
-                {"action": "key_press", "key": "e", "delay_ms": 150},
-                {"action": "key_press", "key": "q", "delay_ms": 150},
-                # ── Aguarda animacao de reparo finalizar ──────────
-                {"action": "wait", "delay_ms": 1500},
-                # ── Verifica segunda maquina (opcional) ──────────
-                # Descomente / edite se houver outra maquina no circuito
-                # {"action": "click", "x": 800, "y": 500,
-                #  "button": "left", "delay_ms": 400},
-                # ── Aguarda proximo defeito (ajuste conforme o servidor)
-                {"action": "wait", "delay_ms": 120000},
+                # ── 1. Timing: aguarda barra vermelha chegar no centro da zona azul ──
+                # EDITE x/y pro centro real da zona azul (use F10 / 'Capturar Cor')
+                # EDITE color_rgb pra cor da PONTA da barra vermelha
+                {"action": "wait_pixel",
+                 "x": 960, "y": 540,
+                 "color_rgb": [220, 30, 30],
+                 "color_tolerance": 35,
+                 "image_timeout_ms": 4000,
+                 "image_wait_for": "present",
+                 "image_skip_steps": 6,  # se nao chegar em 4s, pula todo o bloco
+                 "delay_ms": 0},
+                # ── 2. Detecta letra: pixel DENTRO do glifo Q (ausente em E) ──────
+                # EDITE x/y pra pixel caracteristico de Q (ex: rabinho inferior)
+                # EDITE color_rgb pra cor da letra renderizada (geralmente branca)
+                {"action": "if",
+                 "cond_type": "pixel",
+                 "x": 960, "y": 480,
+                 "color_rgb": [255, 255, 255],
+                 "color_tolerance": 30,
+                 "cond_op": "match",
+                 "delay_ms": 0},
+                # 3. Pixel branco encontrado → e a letra Q
+                {"action": "key_press", "key": "q", "delay_ms": 0},
+                {"action": "else"},
+                # 4. Pixel ausente → e a letra E
+                {"action": "key_press", "key": "e", "delay_ms": 0},
+                {"action": "endif"},
+                # ── 5. Anti-spam: nao deixa pressionar 2x na mesma zona ──────────
+                {"action": "wait", "delay_ms": 100},
             ],
             "macro_speed": "1",
             "rep_mode": "infinite",
@@ -244,43 +238,28 @@ TEMPLATES: list[Template] = [
     ),
     Template(
         id="naramo_reator_estabilizar",
-        name="Naramo — Estabilizar Reator",
+        name="Naramo — Anti-AFK no plantao",
         category=CAT_GAMES,
         icon="🔧",
         description=(
-            "Tecnico de Reator: mantém os controles na posicao correta "
-            "(varetas 55%, bomba refrigerante ON) a cada 3 minutos."
+            "Mantem o personagem ativo durante turnos longos no Naramo: "
+            "movimenta WASD periodicamente pra nao ser kickado por AFK."
         ),
         type="macro",
         warning=(
-            "Funcao: Reactor Operations (Tecnico de Reator).\n"
-            "Use o gravador (F10) para capturar os cliques reais nos controles "
-            "da sala de controle — substitua os placeholders x/y.\n"
-            "Parametros alvo: varetas 55%, bomba refrigerante ON, "
-            "nivel de agua feedwater 100%.\n"
-            "NAO execute se outro tecnico ja estiver operando o reator."
+            "Controlar reator/manutencao precisa de DECISOES baseadas em valores "
+            "que mudam o tempo todo — um macro fixo nao consegue fazer isso bem. "
+            "Este template so resolve o AFK durante plantoes longos.\n\n"
+            "Para o minigame E/Q de reparo, use 'Naramo — Skill Check E/Q'."
         ),
         config={
             "macro_steps": [
-                # ── Ajustar varetas de controle ───────────────────
-                # Clique no controle de insercao de varetas (rod insertion)
-                # Substitua x/y pelo botao real na sua tela
-                {"action": "click", "x": 850, "y": 450,
-                 "button": "left", "delay_ms": 400},
-                {"action": "wait", "delay_ms": 600},
-                # ── Verificar bomba de refrigerante ──────────────
-                # Clique no toggle da bomba de coolant
-                {"action": "click", "x": 780, "y": 500,
-                 "button": "left", "delay_ms": 400},
-                {"action": "wait", "delay_ms": 400},
-                # ── Verificar valvula feedwater ────────────────────
-                {"action": "click", "x": 920, "y": 500,
-                 "button": "left", "delay_ms": 400},
-                {"action": "wait", "delay_ms": 600},
-                # ── Confirmar / fechar menu se abriu ──────────────
-                {"action": "key_press", "key": "escape", "delay_ms": 200},
-                # ── Aguarda proximo ciclo de verificacao (3 min) ──
-                {"action": "wait", "delay_ms": 180000},
+                # ── Movimenta personagem brevemente (2 passos pra cada lado) ──
+                {"action": "key_press", "key": "d", "delay_ms": 0},
+                {"action": "wait", "delay_ms": 200},
+                {"action": "key_press", "key": "a", "delay_ms": 0},
+                # ── Aguarda 4 minutos antes do proximo movimento ──
+                {"action": "wait", "delay_ms": 240000},
             ],
             "macro_speed": "1",
             "rep_mode": "infinite",

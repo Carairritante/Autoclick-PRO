@@ -767,6 +767,10 @@ class SequentialRunner:
         elif action == "move":
             if x is not None and y is not None:
                 self._driver.perform_move(x, y)
+        elif action == "mouse_down":
+            self._driver.perform_mouse_down(x=x, y=y, button=step.button or "left")
+        elif action == "mouse_up":
+            self._driver.perform_mouse_up(button=step.button or "left")
         elif action == "type":
             if step.text:
                 resolved = self._resolve_var_value(step.text, ctx)
@@ -1004,6 +1008,8 @@ class SequentialRunner:
             self._do_http_request(step, ctx)
         elif action == "ai_prompt":
             self._do_ai_prompt(step, ctx)
+        elif action == "fishing_pd_track":
+            self._do_fishing_pd_track(step, ctx)
         elif action == "set_var":
             if step.var_name:
                 resolved = self._resolve_var_value(step.var_value, ctx)
@@ -1150,6 +1156,178 @@ class SequentialRunner:
             out = text.strip() if success else text
             ctx.variables[step.var_name] = out
             self._notify_var(step.var_name, out)
+
+    # ── Helper para fishing_pd_track ─────────────────────────────────────────
+    def _do_fishing_pd_track(self, step, ctx: MacroContext) -> None:
+        """Pesca com PD control: rastreia marcador móvel e segura/solta o mouse.
+
+        Captura uma região da tela em loop, encontra o marcador do jogador
+        (fish_player_color, ex: branco) e o alvo móvel (fish_target_color, ex:
+        cinza escuro) na coluna central onde a cor guia (color_rgb, ex: azul)
+        aparece. Aplica PD control com damping adaptativo pra decidir hold ou
+        release do mouse, mantendo o player sobre o target.
+
+        Sai quando a cor guia desaparece (= minigame acabou) ou no timeout.
+        Solta o mouse no exit, mesmo em caso de exception.
+
+        Algoritmo baseado em macros públicos de pesca de GPO e similares —
+        funciona em jogos com minigame "mantenha o marcador alinhado com a barra
+        que se move".
+        """
+        if (step.x is None or step.y is None
+                or step.ocr_w <= 0 or step.ocr_h <= 0):
+            return
+        if not step.color_rgb or len(step.color_rgb) != 3:
+            return
+        if not step.fish_player_color or len(step.fish_player_color) != 3:
+            return
+        if not step.fish_target_color or len(step.fish_target_color) != 3:
+            return
+
+        try:
+            import numpy as np
+            from PIL import ImageGrab
+        except ImportError:
+            return
+
+        region = (int(step.x), int(step.y),
+                  int(step.x + step.ocr_w), int(step.y + step.ocr_h))
+        guide  = np.array(step.color_rgb,        dtype=int)
+        player = np.array(step.fish_player_color, dtype=int)
+        target = np.array(step.fish_target_color, dtype=int)
+        tol    = max(0, int(step.color_tolerance or 5))
+
+        kp = float(step.fish_kp or 0.3)
+        kd = float(step.fish_kd or 0.15)
+        pd_clamp         = 1.0
+        damping_approach = 3.0
+        damping_chase    = 0.5
+        resend_interval  = 0.2  # s — resend mouseDown/Up pra prevenir desync no Roblox
+
+        button  = step.button or "left"
+        timeout = max(1, (step.image_timeout_ms or 60000)) / 1000.0
+        deadline = time.monotonic() + timeout
+
+        is_holding      = False
+        last_error      = None
+        last_target_y   = None
+        last_scan_time  = time.monotonic()
+        last_resend     = time.monotonic()
+
+        def _color_mask(arr, color):
+            """Retorna mask onde arr (..., 3) está dentro de tol de color."""
+            return (
+                (np.abs(arr[..., 0].astype(int) - color[0]) <= tol) &
+                (np.abs(arr[..., 1].astype(int) - color[1]) <= tol) &
+                (np.abs(arr[..., 2].astype(int) - color[2]) <= tol)
+            )
+
+        try:
+            while self._running and time.monotonic() < deadline:
+                if self._paused:
+                    # Solta mouse durante pause pra não travar o jogo
+                    if is_holding:
+                        self._driver.perform_mouse_up(button=button)
+                        is_holding = False
+                    pause_start = time.monotonic()
+                    with self._pause_cond:
+                        while self._paused and self._running:
+                            self._pause_cond.wait(timeout=0.1)
+                    if not self._running:
+                        break
+                    deadline += time.monotonic() - pause_start
+                    last_scan_time = time.monotonic()
+                    continue
+
+                # 1. Captura região
+                try:
+                    img = np.array(ImageGrab.grab(bbox=region))
+                except Exception:
+                    time.sleep(0.05)
+                    continue
+
+                # 2. Cor guia → coluna central do medidor
+                guide_mask = _color_mask(img, guide)
+                if not np.any(guide_mask):
+                    break  # guia sumiu = minigame acabou
+                _, xs = np.where(guide_mask)
+                middle_x = int(np.mean(xs))
+
+                # 3. Slice vertical
+                col = img[:, middle_x, :]
+
+                # 4. Player (white)
+                pmask = _color_mask(col, player)
+                if not np.any(pmask):
+                    time.sleep(0.01)
+                    continue
+                pys = np.where(pmask)[0]
+                player_y = int(np.mean(pys))
+
+                # 5. Target (dark) — pega o maior grupo contíguo
+                tmask = _color_mask(col, target)
+                if not np.any(tmask):
+                    time.sleep(0.01)
+                    continue
+                tys = np.where(tmask)[0]
+                gap_tol = max(5, int((pys[-1] - pys[0] + 1) * 2))
+                groups, current = [], [int(tys[0])]
+                for i in range(1, len(tys)):
+                    if tys[i] - tys[i-1] <= gap_tol:
+                        current.append(int(tys[i]))
+                    else:
+                        groups.append(current)
+                        current = [int(tys[i])]
+                groups.append(current)
+                biggest = max(groups, key=len)
+                target_y = (biggest[0] + biggest[-1]) // 2
+
+                # 6. PD control
+                error  = player_y - target_y
+                p_term = kp * error
+                d_term = 0.0
+                now = time.monotonic()
+                dt  = now - last_scan_time
+
+                if (last_error is not None and last_target_y is not None
+                        and dt > 0.001):
+                    velocity = (target_y - last_target_y) / dt
+                    error_decreasing = abs(error) < abs(last_error)
+                    approaching = ((velocity > 0 and error > 0)
+                                    or (velocity < 0 and error < 0))
+                    damping = damping_approach if (error_decreasing and approaching) \
+                                else damping_chase
+                    d_term = -kd * damping * velocity
+
+                control = max(-pd_clamp, min(pd_clamp, p_term + d_term))
+                should_hold = control <= 0
+
+                # 7. Aplica hold/release com resend periódico
+                if should_hold and not is_holding:
+                    self._driver.perform_mouse_down(button=button)
+                    is_holding  = True
+                    last_resend = now
+                elif not should_hold and is_holding:
+                    self._driver.perform_mouse_up(button=button)
+                    is_holding  = False
+                    last_resend = now
+                elif now - last_resend >= resend_interval:
+                    if is_holding:
+                        self._driver.perform_mouse_down(button=button)
+                    else:
+                        self._driver.perform_mouse_up(button=button)
+                    last_resend = now
+
+                last_error     = error
+                last_target_y  = target_y
+                last_scan_time = now
+        finally:
+            # Sempre solta mouse ao sair (sucesso, timeout, ou exception)
+            if is_holding:
+                try:
+                    self._driver.perform_mouse_up(button=button)
+                except Exception:
+                    pass
 
     # ── Helpers para call_macro ──────────────────────────────────────────────
     def _resolve_macro_target(self, kind: str, target: str) -> str | None:
