@@ -1195,10 +1195,11 @@ class SequentialRunner:
         guide  = np.array(step.color_rgb,        dtype=int)
         player = np.array(step.fish_player_color, dtype=int)
         target = np.array(step.fish_target_color, dtype=int)
-        tol    = max(0, int(step.color_tolerance or 5))
-
-        kp = float(step.fish_kp or 0.3)
-        kd = float(step.fish_kd or 0.15)
+        # `or default` quebra com 0 legítimo (color_tolerance=0 = exact match,
+        # kp=0 = desliga P, kd=0 = desliga D). Usar None-check explícito.
+        tol = max(0, int(step.color_tolerance if step.color_tolerance is not None else 5))
+        kp  = float(step.fish_kp if step.fish_kp is not None else 0.3)
+        kd  = float(step.fish_kd if step.fish_kd is not None else 0.15)
         pd_clamp         = 1.0
         damping_approach = 3.0
         damping_chase    = 0.5
