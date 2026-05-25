@@ -57,8 +57,38 @@ THEME_LIGHT = {
     "ind_off":   "#c4c9ce",
     "sel":       "#dbe0ff",   # blurple bem clarinho
 }
+# ─── CORES POR CATEGORIA DE STEP ──────────────────────────────────────────────
+# Tons sutis aplicados como fundo de linha no Treeview do macro tab.
+# Permite scan visual rapido de qual tipo de step e qual.
+CATEGORY_TINTS_DARK = {
+    "mouse":       "#2d3a52",   # azul petroleo
+    "keyboard":    "#2d4a3a",   # verde musgo
+    "wait":        "#3a3a42",   # cinza neutro
+    "vision":      "#523a2d",   # laranja queimado
+    "logic":       "#42305a",   # roxo escuro
+    "variable":    "#52472d",   # ambar escuro
+    "integration": "#522d4a",   # rosa escuro
+    "fishing":     "#2d525a",   # ciano escuro
+    "note":        "#26282d",   # cinza fundo (note = comentario)
+    "_default":    "#313338",   # mesmo bg (sem tint)
+}
+CATEGORY_TINTS_LIGHT = {
+    "mouse":       "#dde7f5",
+    "keyboard":    "#dceadc",
+    "wait":        "#ececef",
+    "vision":      "#f5e2d4",
+    "logic":       "#e8dcf2",
+    "variable":    "#f5ecd0",
+    "integration": "#f5dceb",
+    "fishing":     "#d4ecf2",
+    "note":        "#f0f1f3",
+    "_default":    "#ffffff",
+}
+
 # T mutável — _toggle_theme troca os valores in-place pra todos os widgets pegarem
 T = dict(THEME_DARK)
+# CT (Category Tints) — mesmo padrao do T, mutavel pra _toggle_theme atualizar
+CT = dict(CATEGORY_TINTS_DARK)
 
 # ─── FONTES ───────────────────────────────────────────────────────────────────
 # Fonte mono (JetBrains Mono cai em Consolas se não instalado)

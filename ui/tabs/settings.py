@@ -74,6 +74,24 @@ class SettingsMixin:
         self._btn(srow, "▶ Testar", self._play_tick,
                   bg=T["card"], fg=T["text"], padx=8).pack(side="left", padx=8)
 
+        # ── Roblox: multi-instancia ──────────────────────────────────
+        self._section(p, "Roblox", "🎮 ").pack(fill="x", padx=8, pady=(6, 3))
+        mrrow = tk.Frame(p, bg=T["bg"]); mrrow.pack(fill="x", padx=14, pady=(2, 2))
+        tk.Checkbutton(mrrow, text="Multi-Roblox  (permitir varias instancias simultaneas)",
+                       variable=self.var_multi_roblox,
+                       command=self._toggle_multi_roblox,
+                       bg=T["bg"], fg=T["text"], selectcolor=T["sel"],
+                       activebackground=T["bg"],
+                       font=("Segoe UI", 10)).pack(side="left")
+        tk.Label(p,
+                 text="Mantenha o AutoClick aberto enquanto for usar. Util pra "
+                      "contas alt / multi-farm. Uso por sua conta e risco — "
+                      "tecnicamente nao-oficial pelo TOS do Roblox, mas pratica "
+                      "amplamente difundida sem casos conhecidos de banimento.",
+                 bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8),
+                 wraplength=560, justify="left"
+                 ).pack(fill="x", padx=22, pady=(0, 8))
+
         # Profiles
         self._section(p, "Perfis (Salvar / Carregar)", "💾 ").pack(fill="x", padx=8, pady=(6, 3))
         for slot in range(1, 4):
@@ -159,6 +177,28 @@ class SettingsMixin:
         _add(self.var_hk_rec.get(),   lambda: self.after(0, self._macro_toggle_recording))
         _add(self.var_hk_stop.get(),  lambda: self.after(0, self.stop_all))
 
+    def _toggle_multi_roblox(self) -> None:
+        """Callback do checkbox: liga/desliga o mutex do Multi-Roblox."""
+        from core import multi_roblox as _mr
+        from ui.widgets import show_toast
+        want_on = bool(self.var_multi_roblox.get())
+        ok = _mr.enable() if want_on else _mr.disable()
+        if not ok:
+            # Falha: reverte UI e avisa
+            self.var_multi_roblox.set(not want_on)
+            show_toast(self,
+                       "Multi-Roblox indisponivel (so funciona em Windows)",
+                       level="warning")
+            return
+        if want_on:
+            show_toast(self,
+                       "Multi-Roblox ativo. Abra o Roblox normalmente.",
+                       level="success")
+        else:
+            show_toast(self,
+                       "Multi-Roblox desativado. Instancias extras vao fechar.",
+                       level="info")
+
     def _listen_for_hotkey(self, var: tk.StringVar, label: tk.Label) -> None:
         label.config(text="...", bg=T["card"], fg=T["red"],
                      highlightbackground=T["red"])
@@ -201,6 +241,7 @@ class SettingsMixin:
         os.replace(tmp, path)
 
     def _save_slot(self, slot: int) -> None:
+        from ui.widgets import show_toast
         os.makedirs(PROFILES_DIR, exist_ok=True)
         path = os.path.join(PROFILES_DIR, f"slot{slot}.json")
         data = profile_to_dict(self._collect_script(), self._collect_ui_profile())
@@ -210,14 +251,18 @@ class SettingsMixin:
             self._atomic_write_json(path, data)
         except OSError as e:
             self._set_status(f"❌  Erro ao salvar Slot {slot}: {e}")
+            show_toast(self, f"Erro ao salvar Slot {slot}: {e}", level="error")
             return
         label = f" \"{name}\"" if name else ""
         self._set_status(f"✅  Perfil salvo no Slot {slot}{label}.")
+        show_toast(self, f"Slot {slot} salvo{label}", level="success")
 
     def _load_slot(self, slot: int) -> None:
+        from ui.widgets import show_toast
         path = os.path.join(PROFILES_DIR, f"slot{slot}.json")
         if not os.path.exists(path):
             self._set_status(f"⚠  Slot {slot} está vazio.")
+            show_toast(self, f"Slot {slot} está vazio", level="warning")
             return
         try:
             with open(path, encoding="utf-8") as f:
@@ -227,8 +272,12 @@ class SettingsMixin:
             self.var_slot_names[slot - 1].set(d.get("slot_name", ""))
         except (OSError, KeyError, TypeError, ValueError) as e:
             self._set_status(f"❌  Slot {slot} corrompido ou inválido ({type(e).__name__}). Não carregado.")
+            show_toast(self, f"Slot {slot} corrompido: {type(e).__name__}", level="error")
             return
         self._set_status(f"📂  Perfil carregado do Slot {slot}.")
+        slot_label = d.get("slot_name", "")
+        msg = f"Slot {slot} carregado" + (f": {slot_label}" if slot_label else "")
+        show_toast(self, msg, level="info")
 
     def _save_file(self) -> None:
         path = filedialog.asksaveasfilename(

@@ -169,6 +169,10 @@ TEMPLATES: list[Template] = [
                  "color_tolerance": 5,
                  "fish_kp": 0.3,
                  "fish_kd": 0.15,
+                 "fish_pd_clamp": 1.0,
+                 "fish_min_pixels": 3,
+                 "fish_wall_ratio": 0.1,              # forca borda nos extremos (anti-perda)
+                 "fish_fps": 30,
                  "button": "left",
                  "image_timeout_ms": 60000,           # 60s max por pescada
                  "delay_ms": 0},

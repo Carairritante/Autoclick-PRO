@@ -47,7 +47,7 @@ from ui.tabs.macro import MacroMixin
 from ui.tabs.monitor import MonitorMixin
 from ui.tabs.scheduler import SchedulerMixin
 from ui.tabs.settings import SettingsMixin
-from ui.theme import T, THEME_DARK, THEME_LIGHT
+from ui.theme import T, THEME_DARK, THEME_LIGHT, CT, CATEGORY_TINTS_DARK, CATEGORY_TINTS_LIGHT
 from ui.widgets import make_button
 
 pyautogui.FAILSAFE = True
@@ -241,6 +241,7 @@ class AutoClickPro(
         self.var_macro_debug        = tk.BooleanVar(value=False)
         self.var_macro_notify_done  = tk.BooleanVar(value=False)
         self.var_sound              = tk.BooleanVar(value=False)
+        self.var_multi_roblox       = tk.BooleanVar(value=False)
         self.var_hk_clk         = tk.StringVar(value="f6")
         self.var_hk_key         = tk.StringVar(value="f7")
         self.var_hk_stop        = tk.StringVar(value="f8")
@@ -309,7 +310,7 @@ class AutoClickPro(
     # BUTTON HELPER
     # ─────────────────────────────────────────────────────────────
     def _btn(self, parent, text, command, bg, fg=None,
-             font_size=9, bold=False, padx=10, pady=5, width=None):
+             font_size=9, bold=False, padx=12, pady=6, width=None):
         # Auto-pick fg baseado no brilho do bg — contraste absoluto, independe de tema
         if fg is None:
             try:
@@ -1016,6 +1017,8 @@ class AutoClickPro(
         new_theme = "light" if self._current_theme == "dark" else "dark"
         T.clear()
         T.update(THEME_LIGHT if new_theme == "light" else THEME_DARK)
+        CT.clear()
+        CT.update(CATEGORY_TINTS_LIGHT if new_theme == "light" else CATEGORY_TINTS_DARK)
         self._current_theme = new_theme
 
         # 3. Atualizar bg da raiz e titlebar
@@ -1118,6 +1121,12 @@ class AutoClickPro(
                 self._tray.stop()
             except Exception:
                 pass
+        # Libera o mutex Multi-Roblox se ativo (alem do atexit do modulo)
+        try:
+            from core import multi_roblox as _mr
+            _mr.disable()
+        except Exception:
+            pass
         self.destroy()
 
 

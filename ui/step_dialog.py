@@ -48,6 +48,7 @@ ACTION_LABELS: dict[str, str] = {
     "http_request":   "🌐 HTTP Request",
     "ai_prompt":      "🤖 Prompt IA",
     "fishing_pd_track": "🎣 Pesca PD Tracking",
+    "note":           "📌 Nota (comentário)",
     "if":             "🔀 If (condição)",
     "else":           "↪ Else",
     "endif":          "⏹ EndIf",
@@ -87,6 +88,7 @@ ACTION_DESCRIPTIONS: dict[str, str] = {
     "http_request": "Chama uma API REST (Discord webhook, Telegram bot, Home Assistant, etc). Salva a resposta numa variável.",
     "ai_prompt":    "Manda um prompt pra uma IA (Ollama local grátis, ou OpenAI/Groq/OpenRouter). Salva a resposta numa variável. Aceita {variavel} no prompt.",
     "fishing_pd_track": "Pesca avancada com PD control: rastreia marcador movel via 3 cores (guia + peixe + alvo) e segura/solta o mouse pra manter alinhado. Pra GPO Roblox e jogos similares.",
+    "note":         "Nao faz nada — so exibe um label/comentario na lista de steps. Use pra documentar macros longos.",
     "if":           "Inicia bloco condicional. Steps até Else/EndIf rodam só se a condição der true.",
     "else":         "Marca o bloco que roda se o If for falso. Precisa estar entre If e EndIf.",
     "endif":        "Fecha o bloco If/Else.",
@@ -97,6 +99,43 @@ COND_OPS_IMAGE  = ["present", "absent"]
 COND_OPS_PIXEL  = ["match", "no_match"]
 
 ACTIONS = list(ACTION_LABELS.keys())
+
+# Categoria de cada acao — usada pra cor de fundo no Treeview de steps
+# (ver ui/theme.py CATEGORY_TINTS_*). Toda nova acao precisa entrar aqui.
+ACTION_CATEGORY: dict[str, str] = {
+    "click": "mouse", "double_click": "mouse", "right_click": "mouse",
+    "mouse_down": "mouse", "mouse_up": "mouse",
+    "move": "mouse", "drag": "mouse", "scroll": "mouse",
+    "type": "keyboard", "key_press": "keyboard",
+    "wait": "wait", "wait_image": "wait", "wait_pixel": "wait", "wait_window": "wait",
+    "pixel_check": "vision", "image_click": "vision",
+    "click_text": "vision", "ocr_read": "vision",
+    "if": "logic", "else": "logic", "endif": "logic", "call_macro": "logic",
+    "set_var": "variable", "clipboard_set": "variable", "clipboard_get": "variable",
+    "http_request": "integration", "ai_prompt": "integration",
+    "fishing_pd_track": "fishing",
+    "note": "note",
+}
+
+
+def get_action_category(action: str) -> str:
+    """Retorna categoria do step (ex: 'mouse', 'vision') — default '_default'."""
+    return ACTION_CATEGORY.get(action, "_default")
+
+
+# Label amigavel de cada categoria + ordem de exibicao no picker.
+CATEGORY_LABELS: dict[str, str] = {
+    "mouse":       "🖱  Mouse & Cliques",
+    "keyboard":    "⌨  Teclado",
+    "wait":        "⏱  Esperas",
+    "vision":      "👁  Visão (OCR, Imagem, Pixel)",
+    "logic":       "🔀  Lógica & Fluxo",
+    "variable":    "📝  Variáveis",
+    "integration": "🌐  Integrações (HTTP, IA)",
+    "fishing":     "🎣  Pesca",
+    "note":        "📌  Comentários",
+}
+CATEGORY_ORDER: list[str] = list(CATEGORY_LABELS.keys())
 
 # Teclas comuns para key_press
 COMMON_KEYS = [
@@ -146,7 +185,13 @@ def step_to_params_str(step: MacroStep) -> str:
         txt = (step.text or "")[:30]
         return f'"{txt}"' + ("…" if len(step.text or "") > 30 else "")
     elif a == "wait":
+        if (step.delay_ms_max and step.delay_ms_max > 0
+                and step.delay_ms_max >= max(0, step.delay_ms_min or 0)):
+            return f"{step.delay_ms_min or 0}-{step.delay_ms_max} ms (rand)"
         return f"{step.delay_ms} ms"
+    elif a == "note":
+        txt = (step.text or "")[:60]
+        return f"📌 {txt}" + ("…" if len(step.text or "") > 60 else "")
     elif a == "scroll":
         coord = f"({step.x}, {step.y})" if step.x is not None else "(cursor)"
         dire = "↑" if step.scroll_dy > 0 else "↓"
@@ -198,7 +243,13 @@ def step_to_params_str(step: MacroStep) -> str:
     elif a == "fishing_pd_track":
         guide = f"RGB{tuple(step.color_rgb)}" if step.color_rgb else "RGB(?)"
         region = f"{step.ocr_w}x{step.ocr_h}" if step.ocr_w and step.ocr_h else "?"
-        return f"({step.x},{step.y}) {region}  guia={guide}  kp={step.fish_kp} kd={step.fish_kd}"
+        extras = []
+        if step.fish_wall_ratio and step.fish_wall_ratio > 0:
+            extras.append(f"wall={step.fish_wall_ratio}")
+        if step.fish_fps and step.fish_fps != 30:
+            extras.append(f"fps={step.fish_fps}")
+        extra_str = f"  [{' '.join(extras)}]" if extras else ""
+        return f"({step.x},{step.y}) {region}  guia={guide}  kp={step.fish_kp} kd={step.fish_kd}{extra_str}"
     elif a == "ai_prompt":
         backend = step.ai_backend or "ollama"
         model   = step.ai_model or "?"
@@ -227,6 +278,228 @@ def step_to_params_str(step: MacroStep) -> str:
     elif a == "else":  return "—"
     elif a == "endif": return "—"
     return ""
+
+
+class ActionPickerDialog(tk.Toplevel):
+    """Modal estilo Spotlight: busca acoes por nome/descricao + agrupamento por categoria.
+
+    Substitui o Combobox de 25+ itens. Permite achar qualquer step com 2 cliques
+    ou digitando 2-3 letras.
+
+    Uso:
+        picker = ActionPickerDialog(parent, T, current_action="click")
+        parent.wait_window(picker)
+        if picker.result:
+            ... usar picker.result (str: action name)
+    """
+
+    def __init__(self, parent: tk.Tk, T: dict, current_action: str = "click") -> None:
+        super().__init__(parent)
+        self._T = T
+        self.result: str | None = None
+        self._current = current_action
+
+        self.title("Escolher ação")
+        self.configure(bg=T["bg"])
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+
+        self._build()
+        self._populate()
+
+        self.update_idletasks()
+        # Centraliza no parent
+        try:
+            px = parent.winfo_x() + (parent.winfo_width()  - self.winfo_width())  // 2
+            py = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
+            self.geometry(f"+{max(0, px)}+{max(0, py)}")
+        except Exception:
+            pass
+
+        # Foco no search box
+        self._search_entry.focus_set()
+
+    def _build(self) -> None:
+        T = self._T
+
+        # ── Search box ───────────────────────────────────────────
+        top = tk.Frame(self, bg=T["bg"])
+        top.pack(fill="x", padx=14, pady=(14, 8))
+        tk.Label(top, text="🔍", bg=T["bg"], fg=T["text"],
+                 font=("Segoe UI", 13)).pack(side="left", padx=(0, 6))
+        self._var_search = tk.StringVar()
+        self._search_entry = tk.Entry(
+            top, textvariable=self._var_search,
+            bg=T["card"], fg=T["text"], insertbackground=T["text"],
+            font=("Segoe UI", 12), relief="flat", bd=6,
+        )
+        self._search_entry.pack(side="left", fill="x", expand=True)
+        self._var_search.trace_add("write", lambda *_: self._refilter())
+
+        # Hint debaixo do search
+        tk.Label(self, text="Digite pra filtrar  •  ↑↓ navegar  •  Enter selecionar  •  Esc cancelar",
+                 bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
+                 ).pack(fill="x", padx=14, pady=(0, 6))
+
+        # ── Treeview com categorias e acoes ──────────────────────
+        tree_frame = tk.Frame(self, bg=T["bg"])
+        tree_frame.pack(fill="both", expand=True, padx=14, pady=(0, 8))
+
+        self._tree = ttk.Treeview(
+            tree_frame, columns=("label",), show="tree",
+            height=14, selectmode="browse", style="Seq.Treeview",
+        )
+        self._tree.column("#0", width=40, stretch=False)   # icon/expand
+        self._tree.column("label", width=420, anchor="w")
+
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self._tree.yview)
+        self._tree.configure(yscrollcommand=vsb.set)
+        self._tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        # Descricao da acao selecionada
+        self._desc_var = tk.StringVar(value="")
+        tk.Label(self, textvariable=self._desc_var, bg=T["bg"], fg=T["accent2"],
+                 font=("Segoe UI", 9, "italic"), wraplength=460, justify="left",
+                 anchor="w", height=2
+                 ).pack(fill="x", padx=14, pady=(0, 8))
+
+        # ── Botoes ───────────────────────────────────────────────
+        btns = tk.Frame(self, bg=T["bg"])
+        btns.pack(fill="x", padx=14, pady=(0, 14))
+        tk.Button(btns, text="Cancelar", command=self._on_cancel,
+                  bg=T["card"], fg=T["text"], activebackground=T["card_h"],
+                  font=("Segoe UI", 10), relief="flat", padx=14, pady=6,
+                  cursor="hand2"
+                  ).pack(side="right", padx=(4, 0))
+        tk.Button(btns, text="Selecionar", command=self._on_confirm,
+                  bg=T["accent"], fg="white", activebackground=T["accent_h"],
+                  font=("Segoe UI", 10, "bold"), relief="flat", padx=14, pady=6,
+                  cursor="hand2"
+                  ).pack(side="right")
+
+        # ── Bindings ─────────────────────────────────────────────
+        self._tree.bind("<<TreeviewSelect>>", self._on_select)
+        self._tree.bind("<Double-1>", lambda e: self._on_confirm())
+        self.bind("<Return>", lambda e: self._on_confirm())
+        self.bind("<Escape>", lambda e: self._on_cancel())
+        # Setas no search saltam pro tree
+        self._search_entry.bind("<Down>", self._search_to_tree)
+        self._search_entry.bind("<Return>", lambda e: self._on_confirm())
+
+    def _search_to_tree(self, _e=None):
+        """Setinha pra baixo no search: move foco pro primeiro item do tree."""
+        children = self._tree.get_children()
+        if children:
+            # Primeiro item visivel pode ser categoria — desce pra primeira acao real
+            for cat_id in children:
+                actions = self._tree.get_children(cat_id)
+                if actions:
+                    self._tree.focus(actions[0])
+                    self._tree.selection_set(actions[0])
+                    self._tree.see(actions[0])
+                    break
+            self._tree.focus_set()
+        return "break"
+
+    def _populate(self) -> None:
+        """Reconstroi tree com todas as categorias + acoes. Selecao inicial = current."""
+        # Configura tags de cor por categoria (mesmo padrao do macro_tree)
+        try:
+            from ui.theme import CT
+            for cat, color in CT.items():
+                self._tree.tag_configure(cat, background=color, foreground=self._T["text"])
+        except Exception:
+            pass
+
+        self._rebuild_items("")
+
+        # Tenta selecionar a acao atual via iid (formato: "act::<action>")
+        target_iid = f"act::{self._current}"
+        if self._tree.exists(target_iid):
+            self._tree.selection_set(target_iid)
+            self._tree.focus(target_iid)
+            self._tree.see(target_iid)
+            self._update_desc(self._current)
+
+    def _rebuild_items(self, query: str) -> None:
+        """Limpa tree e reinsere filtrado por query (case-insensitive)."""
+        for item in self._tree.get_children():
+            self._tree.delete(item)
+
+        q = query.strip().lower()
+        for cat in CATEGORY_ORDER:
+            # Coleta acoes dessa categoria que casam com query
+            matches = []
+            for action, cat_name in ACTION_CATEGORY.items():
+                if cat_name != cat:
+                    continue
+                label = ACTION_LABELS.get(action, action)
+                desc  = ACTION_DESCRIPTIONS.get(action, "")
+                if not q or q in label.lower() or q in action.lower() or q in desc.lower():
+                    matches.append((action, label, desc))
+            if not matches:
+                continue
+            cat_label = CATEGORY_LABELS.get(cat, cat)
+            cat_id = self._tree.insert("", "end", text="", values=(cat_label,),
+                                        open=True, tags=())
+            for action, label, _desc in matches:
+                # iid="act::<action>" — usado pelo _on_confirm pra extrair acao
+                self._tree.insert(cat_id, "end", text="", iid=f"act::{action}",
+                                   values=(f"   {label}",), tags=(cat,))
+
+        # Mostra contador no desc se houve filtragem
+        if q:
+            total = sum(len(self._tree.get_children(c)) for c in self._tree.get_children())
+            if total == 0:
+                self._desc_var.set(f"Nenhuma acao encontrada para '{query}'.")
+            else:
+                self._desc_var.set(f"{total} resultado(s) para '{query}'.")
+        else:
+            self._desc_var.set("")
+
+    def _refilter(self) -> None:
+        self._rebuild_items(self._var_search.get())
+        # Auto-seleciona o primeiro match (entao Enter funciona direto)
+        for cat_id in self._tree.get_children():
+            for item in self._tree.get_children(cat_id):
+                self._tree.selection_set(item)
+                self._tree.focus(item)
+                self._tree.see(item)
+                # Atualiza descricao
+                act = item[len("act::"):] if item.startswith("act::") else ""
+                if act:
+                    self._update_desc(act)
+                return
+
+    def _update_desc(self, action: str) -> None:
+        desc = ACTION_DESCRIPTIONS.get(action, "")
+        if not desc and not self._var_search.get():
+            self._desc_var.set("")
+        elif desc:
+            self._desc_var.set(desc)
+
+    def _on_select(self, _e=None) -> None:
+        sel = self._tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if iid.startswith("act::"):
+            self._update_desc(iid[len("act::"):])
+
+    def _on_confirm(self, _e=None) -> None:
+        sel = self._tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if iid.startswith("act::"):
+            self.result = iid[len("act::"):]
+            self.destroy()
+
+    def _on_cancel(self, _e=None) -> None:
+        self.result = None
+        self.destroy()
 
 
 class StepDialog(tk.Toplevel):
@@ -271,11 +544,17 @@ class StepDialog(tk.Toplevel):
                  font=("Segoe UI", 10)).pack(side="left")
 
         self._var_action = tk.StringVar(value=step.action if step else "click")
-        action_cb = ttk.Combobox(top, textvariable=self._var_action,
-                                  values=ACTIONS, state="readonly", width=16,
-                                  font=("Segoe UI", 10))
-        action_cb.pack(side="left", padx=8)
-        action_cb.bind("<<ComboboxSelected>>", lambda e: self._refresh_fields())
+        # Botao que abre ActionPickerDialog (Spotlight-style com search + categorias)
+        # Substitui o antigo Combobox de 25+ itens flat.
+        self._action_btn_var = tk.StringVar()
+        self._set_action_btn_label(self._var_action.get())
+        action_btn = tk.Button(
+            top, textvariable=self._action_btn_var, command=self._open_action_picker,
+            bg=T["card"], fg=T["text"], activebackground=T["card_h"],
+            font=("Segoe UI", 10), relief="flat", padx=12, pady=4,
+            cursor="hand2", anchor="w", width=28,
+        )
+        action_btn.pack(side="left", padx=8)
 
         # ── Descrição da ação (atualiza dinamicamente em _refresh_fields) ──
         self._desc_label = tk.Label(p, text="", bg=T["bg"], fg=T["accent2"],
@@ -298,7 +577,10 @@ class StepDialog(tk.Toplevel):
         self._var_scroll_smooth = tk.BooleanVar(
             value=bool(getattr(step, "scroll_smooth", False)) if step else False)
         self._var_repeat    = tk.StringVar(value=str(step.repeat) if step else "1")
+        self._var_wait_min  = tk.StringVar(value=str(step.delay_ms_min) if step and step.delay_ms_min else "0")
+        self._var_wait_max  = tk.StringVar(value=str(step.delay_ms_max) if step and step.delay_ms_max else "0")
         self._text_widget: tk.Text | None = None
+        self._note_text_widget: tk.Text | None = None
         # pixel_check
         _rgb = step.color_rgb if step and step.color_rgb else [0, 0, 0]
         self._var_color_r   = tk.StringVar(value=str(_rgb[0]))
@@ -406,6 +688,10 @@ class StepDialog(tk.Toplevel):
         self._var_fish_target_b = tk.StringVar(value=str(_tc[2]))
         self._var_fish_kp = tk.StringVar(value=str(step.fish_kp) if step else "0.3")
         self._var_fish_kd = tk.StringVar(value=str(step.fish_kd) if step else "0.15")
+        self._var_fish_pd_clamp   = tk.StringVar(value=str(step.fish_pd_clamp) if step else "1.0")
+        self._var_fish_min_pixels = tk.StringVar(value=str(step.fish_min_pixels) if step else "3")
+        self._var_fish_wall_ratio = tk.StringVar(value=str(step.fish_wall_ratio) if step else "0.0")
+        self._var_fish_fps        = tk.StringVar(value=str(step.fish_fps) if step else "30")
 
         if step and step.text:
             self._var_text.set(step.text)
@@ -420,6 +706,21 @@ class StepDialog(tk.Toplevel):
         self._btn(btns, "✕ Cancelar", self.destroy,
                   T["card"], fg=T["text"]).pack(side="left")
 
+    def _set_action_btn_label(self, action: str) -> None:
+        """Atualiza o texto do botao de acao (com seta de dropdown)."""
+        label = ACTION_LABELS.get(action, action)
+        self._action_btn_var.set(f"{label}   ▾")
+
+    def _open_action_picker(self) -> None:
+        """Abre o ActionPickerDialog (Spotlight com search) pra trocar de acao."""
+        picker = ActionPickerDialog(self, self._T,
+                                     current_action=self._var_action.get())
+        self.wait_window(picker)
+        if picker.result and picker.result != self._var_action.get():
+            self._var_action.set(picker.result)
+            self._set_action_btn_label(picker.result)
+            self._refresh_fields()
+
     def _refresh_fields(self) -> None:
         """Reconstrói os campos dinâmicos conforme a ação selecionada."""
         T = self._T
@@ -428,6 +729,9 @@ class StepDialog(tk.Toplevel):
         self._text_widget = None
 
         action = self._var_action.get()
+        # Atualiza label do botao (caso _refresh_fields seja chamado sem passar pelo picker)
+        if hasattr(self, "_action_btn_var"):
+            self._set_action_btn_label(action)
         # Atualiza descrição leiga abaixo do dropdown
         if hasattr(self, "_desc_label"):
             self._desc_label.config(text=ACTION_DESCRIPTIONS.get(action, ""))
@@ -642,7 +946,30 @@ class StepDialog(tk.Toplevel):
         elif action == "wait":
             lbl("Aguardar (ms):", 0)
             entry(self._var_delay, 0)
+            lbl("Min (ms, opcional):", 1)
+            entry(self._var_wait_min, 1)
+            lbl("Max (ms, opcional):", 2)
+            entry(self._var_wait_max, 2)
+            tk.Label(f, text="Se min E max preenchidos (>0), sorteia um valor entre eles. Senao usa o fixo acima.",
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8),
+                     wraplength=460, justify="left"
+                     ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(4, 0))
             return  # wait não tem delay separado
+
+        elif action == "note":
+            lbl("Texto do comentario:", 0)
+            note_text = tk.Text(f, height=4, width=44, bg=T["card"], fg=T["text"],
+                                insertbackground=T["text"], font=("Consolas", 10),
+                                relief="flat", padx=6, pady=4, wrap="word")
+            note_text.grid(row=0, column=1, columnspan=3, sticky="we", pady=2)
+            if self._var_text.get():
+                note_text.insert("1.0", self._var_text.get())
+            self._note_text_widget = note_text
+            tk.Label(f, text="Nao executa nada — so aparece como label na lista de steps. Use pra organizar macros longos.",
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8),
+                     wraplength=460, justify="left"
+                     ).grid(row=1, column=1, columnspan=3, sticky="w", pady=(4, 0))
+            return
 
         elif action == "pixel_check":
             lbl("X:", 0)
@@ -1312,32 +1639,57 @@ class StepDialog(tk.Toplevel):
 
             self._btn(f, "📷 Capturar Guia",   self._capture_color, T["accent2"], padx=6, pady=2
                        ).grid(row=3, column=3, sticky="w", padx=(8, 0))
+            self._btn(f, "📷 Capturar Peixe",
+                       lambda: self._capture_color_into(self._var_fish_player_r,
+                                                        self._var_fish_player_g,
+                                                        self._var_fish_player_b,
+                                                        "cor do PEIXE"),
+                       T["accent2"], padx=6, pady=2
+                       ).grid(row=4, column=3, sticky="w", padx=(8, 0))
+            self._btn(f, "📷 Capturar Alvo",
+                       lambda: self._capture_color_into(self._var_fish_target_r,
+                                                        self._var_fish_target_g,
+                                                        self._var_fish_target_b,
+                                                        "cor do ALVO"),
+                       T["accent2"], padx=6, pady=2
+                       ).grid(row=5, column=3, sticky="w", padx=(8, 0))
 
             lbl("Tolerancia cor:", 6); entry(self._var_tolerance, 6, w=5)
 
             lbl("kp (proporcional):", 7); entry(self._var_fish_kp, 7, w=6)
             lbl("kd (derivativo):", 8);   entry(self._var_fish_kd, 8, w=6)
 
-            lbl("Botao do mouse:", 9)
+            # ── Avancado: anti-overcorrection / anti-ruido / wall-clamp / fps ──
+            lbl("PD clamp (max):", 9);     entry(self._var_fish_pd_clamp, 9, w=6)
+            lbl("Min pixels:", 10);        entry(self._var_fish_min_pixels, 10, w=6)
+            lbl("Wall ratio (0-0.5):", 11); entry(self._var_fish_wall_ratio, 11, w=6)
+            lbl("FPS scan:", 12);          entry(self._var_fish_fps, 12, w=6)
+
+            lbl("Botao do mouse:", 13)
             ttk.Combobox(f, textvariable=self._var_button,
                          values=["left", "right"], state="readonly",
                          width=10, font=("Segoe UI", 10)
-                         ).grid(row=9, column=1, sticky="w")
+                         ).grid(row=13, column=1, sticky="w")
 
-            lbl("Timeout (ms):", 10); entry(self._var_img_timeout, 10)
+            lbl("Timeout (ms):", 14); entry(self._var_img_timeout, 14)
 
             tk.Label(f, text="Defaults GPO: guia=RGB(85,170,255), peixe=(255,255,255), alvo=(25,25,25).",
                      bg=T["bg"], fg=T["accent2"], font=("Segoe UI", 8, "italic"),
                      wraplength=460, justify="left"
-                     ).grid(row=11, column=0, columnspan=4, sticky="w", pady=(6, 0))
+                     ).grid(row=15, column=0, columnspan=4, sticky="w", pady=(6, 0))
             tk.Label(f, text="Capture a regiao do medidor inteiro. Cor GUIA = coluna fixa (azul). "
                               "PEIXE = marcador que voce controla. ALVO = barra que se move.",
                      bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8),
                      wraplength=460, justify="left"
-                     ).grid(row=12, column=0, columnspan=4, sticky="w", pady=(2, 0))
+                     ).grid(row=16, column=0, columnspan=4, sticky="w", pady=(2, 0))
+            tk.Label(f, text="Avancado: PD clamp=limite max do controle (1.0 OK). Min pixels=filtro de ruido (3+). "
+                              "Wall ratio=0.1 forca borda nos extremos (0=off). FPS scan=30 OK; menor=menos CPU.",
+                     bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8),
+                     wraplength=460, justify="left"
+                     ).grid(row=17, column=0, columnspan=4, sticky="w", pady=(2, 0))
 
-            lbl("Delay pre-step (ms):", 14)
-            entry(self._var_delay, 14)
+            lbl("Delay pre-step (ms):", 19)
+            entry(self._var_delay, 19)
             return
 
         if action == "set_var":
@@ -1376,6 +1728,12 @@ class StepDialog(tk.Toplevel):
                 tk.Label(f, text="set/concat aceitam texto  •  add/sub/mul/div só numéricos",
                          bg=T["bg"], fg=T["subtext"], font=("Segoe UI", 8)
                          ).grid(row=4, column=1, columnspan=3, sticky="w")
+
+            tk.Label(f, text="💾 Variaveis com nome iniciando em '$' (ex: $kills, $money) persistem "
+                              "entre execucoes do macro — gravadas em profiles/persistent_vars.json.",
+                     bg=T["bg"], fg=T["accent2"], font=("Segoe UI", 8, "italic"),
+                     wraplength=460, justify="left"
+                     ).grid(row=5, column=0, columnspan=4, sticky="w", pady=(6, 0))
 
             lbl("Delay pré-step (ms):", 10)
             entry(self._var_delay, 10)
@@ -1421,6 +1779,29 @@ class StepDialog(tk.Toplevel):
             self._var_color_b.set(str(b))
             self.after(0, lambda: self.title(orig_title))
             self.after(0, self._update_color_preview)
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _capture_color_into(self, vr: tk.StringVar, vg: tk.StringVar, vb: tk.StringVar,
+                            label: str = "cor") -> None:
+        """Captura cor sob cursor depois de 3s e grava nas 3 vars dadas.
+        Nao mexe em x/y (diferente do _capture_color que tambem grava posicao).
+        Usado pelos botoes 'Capturar Peixe' e 'Capturar Alvo' no fishing_pd_track.
+        """
+        if not self._driver:
+            return
+        orig_title = self.title()
+        self.title(f"Posicione o cursor sobre a {label}... (3s)")
+
+        def _do():
+            time.sleep(3)
+            x, y = self._driver.get_position()
+            r, g, b = self._driver.get_pixel_color(int(x), int(y))
+            vr.set(str(r))
+            vg.set(str(g))
+            vb.set(str(b))
+            self.after(0, lambda: self.title(orig_title))
+            self.after(0, self._refresh_fields)  # repinta preview
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -1536,8 +1917,16 @@ class StepDialog(tk.Toplevel):
         except Exception:
             self._image_preview_label.config(image="", text="erro\npreview")
 
-    def _capture_image_region(self) -> None:
-        """Esconde o dialog, mostra overlay translúcido, captura região arrastada."""
+    def _select_screen_region(self, prompt: str = "Arraste para selecionar a regiao"):
+        """Helper compartilhado: mostra overlay fullscreen com screenshot + HUD ao vivo.
+
+        Retorna (left, top, width, height, screenshot_PIL) ou None se cancelado ou
+        area muito pequena. Usado por _capture_image_region e _capture_ocr_region.
+
+        Melhorias vs overlay antigo: HUD live (cursor + dimensoes), retangulo mais
+        grosso com preenchimento stippled (efeito de transparencia), instrucoes
+        visiveis, Esc cancela claramente.
+        """
         from PIL import ImageGrab
 
         self.withdraw()
@@ -1548,14 +1937,14 @@ class StepDialog(tk.Toplevel):
             screenshot = ImageGrab.grab()
         except Exception:
             self.deiconify()
-            return
+            return None
 
         T = self._T
         sw, sh = screenshot.size
 
         overlay = tk.Toplevel(self)
         overlay.attributes("-fullscreen", True)
-        overlay.attributes("-alpha", 0.4)
+        overlay.attributes("-alpha", 0.45)
         overlay.configure(bg="black")
         overlay.attributes("-topmost", True)
         overlay.config(cursor="crosshair")
@@ -1564,16 +1953,54 @@ class StepDialog(tk.Toplevel):
                            cursor="crosshair")
         canvas.pack(fill="both", expand=True)
 
-        sel = {"x0": 0, "y0": 0, "x1": 0, "y1": 0, "rect": None}
+        # ── HUD ──────────────────────────────────────────────────────
+        # Faixa superior com instrucao
+        hud_top = tk.Frame(overlay, bg=T["accent"], padx=14, pady=6)
+        hud_top.place(relx=0.5, y=10, anchor="n")
+        tk.Label(hud_top, text=f"  {prompt}  •  Esc cancela  ",
+                 bg=T["accent"], fg="white",
+                 font=("Segoe UI", 11, "bold")).pack()
+
+        # HUD inferior com coordenadas/dimensoes live
+        hud_bot = tk.Frame(overlay, bg=T["bg_deep"], padx=14, pady=6)
+        hud_bot.place(relx=0.5, rely=1.0, y=-12, anchor="s")
+        hud_var = tk.StringVar(value="Cursor: (—, —)")
+        tk.Label(hud_bot, textvariable=hud_var, bg=T["bg_deep"],
+                 fg=T["accent2"], font=("Consolas", 12, "bold")).pack()
+
+        sel = {"x0": 0, "y0": 0, "x1": 0, "y1": 0,
+               "rect": None, "fill": None, "active": False}
+
+        def update_hud(cur_x: int, cur_y: int):
+            if sel["active"]:
+                left = min(sel["x0"], cur_x)
+                top  = min(sel["y0"], cur_y)
+                w    = abs(cur_x - sel["x0"])
+                h    = abs(cur_y - sel["y0"])
+                hud_var.set(f"Origem: ({left}, {top})   Tamanho: {w} × {h} px")
+            else:
+                hud_var.set(f"Cursor: ({cur_x}, {cur_y})  —  clique e arraste pra selecionar")
+
+        def on_motion(e):
+            update_hud(e.x_root, e.y_root)
 
         def on_press(e):
             sel["x0"], sel["y0"] = e.x_root, e.y_root
-            if sel["rect"]:
-                canvas.delete(sel["rect"])
+            sel["active"] = True
+            for k in ("rect", "fill"):
+                if sel[k]:
+                    canvas.delete(sel[k])
+                    sel[k] = None
+            # Preenchimento stipled (poor-man's transparencia em tk)
+            sel["fill"] = canvas.create_rectangle(
+                e.x, e.y, e.x, e.y,
+                fill=T["accent"], stipple="gray25", outline="",
+            )
             sel["rect"] = canvas.create_rectangle(
                 e.x, e.y, e.x, e.y,
-                outline=T["accent2"], width=2,
+                outline=T["accent2"], width=3,
             )
+            update_hud(e.x_root, e.y_root)
 
         def on_drag(e):
             if sel["rect"] is None:
@@ -1581,42 +2008,47 @@ class StepDialog(tk.Toplevel):
             x0_local = sel["x0"] - overlay.winfo_rootx()
             y0_local = sel["y0"] - overlay.winfo_rooty()
             canvas.coords(sel["rect"], x0_local, y0_local, e.x, e.y)
+            canvas.coords(sel["fill"], x0_local, y0_local, e.x, e.y)
+            update_hud(e.x_root, e.y_root)
 
         def on_release(e):
             sel["x1"], sel["y1"] = e.x_root, e.y_root
             overlay.destroy()
 
         def on_cancel(e):
-            sel["x0"] = sel["x1"]  # garante área zero → aborta
+            sel["x0"] = sel["x1"]  # garante area zero → aborta
             sel["y0"] = sel["y1"]
             overlay.destroy()
 
+        canvas.bind("<Motion>", on_motion)
         canvas.bind("<ButtonPress-1>", on_press)
         canvas.bind("<B1-Motion>", on_drag)
         canvas.bind("<ButtonRelease-1>", on_release)
         overlay.bind("<Escape>", on_cancel)
-
         overlay.wait_window()
 
-        # Restaurar dialog
         self.deiconify()
         self.lift()
 
-        # Validar e recortar
         x0, y0, x1, y1 = sel["x0"], sel["y0"], sel["x1"], sel["y1"]
         left, top = min(x0, x1), min(y0, y1)
         right, bottom = max(x0, x1), max(y0, y1)
         if right - left < 5 or bottom - top < 5:
-            return  # área muito pequena → ignora
+            return None
 
-        # Clamp dentro da screenshot
-        left = max(0, min(left, sw))
-        top = max(0, min(top, sh))
+        left  = max(0, min(left, sw))
+        top   = max(0, min(top, sh))
         right = max(0, min(right, sw))
         bottom = max(0, min(bottom, sh))
+        return (int(left), int(top), int(right - left), int(bottom - top), screenshot)
 
-        cropped = screenshot.crop((left, top, right, bottom))
-
+    def _capture_image_region(self) -> None:
+        """Captura região arrastada e salva como PNG (image_click step)."""
+        result = self._select_screen_region("Selecione a IMAGEM (template) que sera procurada na tela")
+        if result is None:
+            return
+        left, top, w, h, screenshot = result
+        cropped = screenshot.crop((left, top, left + w, top + h))
         import base64, io
         buf = io.BytesIO()
         cropped.save(buf, format="PNG")
@@ -1627,78 +2059,15 @@ class StepDialog(tk.Toplevel):
     # OCR — captura de região e teste
     # ─────────────────────────────────────────────────────────────
     def _capture_ocr_region(self) -> None:
-        """Esconde dialog, mostra overlay translúcido, captura região arrastada para OCR."""
-        from PIL import ImageGrab
-        self.withdraw()
-        self.update()
-        time.sleep(0.3)
-        try:
-            screenshot = ImageGrab.grab()
-        except Exception:
-            self.deiconify()
+        """Captura região arrastada e preenche x/y/ocr_w/ocr_h (OCR/fishing/etc)."""
+        result = self._select_screen_region("Selecione a REGIAO da tela")
+        if result is None:
             return
-        T = self._T
-        sw, sh = screenshot.size
-
-        overlay = tk.Toplevel(self)
-        overlay.attributes("-fullscreen", True)
-        overlay.attributes("-alpha", 0.4)
-        overlay.configure(bg="black")
-        overlay.attributes("-topmost", True)
-        overlay.config(cursor="crosshair")
-
-        canvas = tk.Canvas(overlay, bg="black", highlightthickness=0, cursor="crosshair")
-        canvas.pack(fill="both", expand=True)
-
-        sel = {"x0": 0, "y0": 0, "x1": 0, "y1": 0, "rect": None}
-
-        def on_press(e):
-            sel["x0"], sel["y0"] = e.x_root, e.y_root
-            if sel["rect"]:
-                canvas.delete(sel["rect"])
-            sel["rect"] = canvas.create_rectangle(
-                e.x, e.y, e.x, e.y, outline=T["accent2"], width=2)
-
-        def on_drag(e):
-            if sel["rect"] is None:
-                return
-            x0_local = sel["x0"] - overlay.winfo_rootx()
-            y0_local = sel["y0"] - overlay.winfo_rooty()
-            canvas.coords(sel["rect"], x0_local, y0_local, e.x, e.y)
-
-        def on_release(e):
-            sel["x1"], sel["y1"] = e.x_root, e.y_root
-            overlay.destroy()
-
-        def on_cancel(e):
-            sel["x0"] = sel["x1"]
-            sel["y0"] = sel["y1"]
-            overlay.destroy()
-
-        canvas.bind("<ButtonPress-1>", on_press)
-        canvas.bind("<B1-Motion>", on_drag)
-        canvas.bind("<ButtonRelease-1>", on_release)
-        overlay.bind("<Escape>", on_cancel)
-        overlay.wait_window()
-
-        self.deiconify()
-        self.lift()
-
-        x0, y0, x1, y1 = sel["x0"], sel["y0"], sel["x1"], sel["y1"]
-        left, top = min(x0, x1), min(y0, y1)
-        right, bottom = max(x0, x1), max(y0, y1)
-        if right - left < 5 or bottom - top < 5:
-            return
-
-        left = max(0, min(left, sw))
-        top = max(0, min(top, sh))
-        right = max(0, min(right, sw))
-        bottom = max(0, min(bottom, sh))
-
-        self._var_x.set(str(int(left)))
-        self._var_y.set(str(int(top)))
-        self._var_ocr_w.set(str(int(right - left)))
-        self._var_ocr_h.set(str(int(bottom - top)))
+        left, top, w, h, _screenshot = result
+        self._var_x.set(str(left))
+        self._var_y.set(str(top))
+        self._var_ocr_w.set(str(w))
+        self._var_ocr_h.set(str(h))
 
     def _test_ocr(self) -> None:
         """Executa OCR na região atual e mostra o resultado na UI."""
@@ -1815,6 +2184,12 @@ class StepDialog(tk.Toplevel):
         text = None
         if action == "type":
             text = self._text_widget.get("1.0", "end-1c") if self._text_widget else ""
+        elif action == "note":
+            text = self._note_text_widget.get("1.0", "end-1c") if self._note_text_widget else self._var_text.get()
+
+        # wait — opcional delay aleatorio (min/max)
+        delay_ms_min = max(0, _int(self._var_wait_min)) if action == "wait" else 0
+        delay_ms_max = max(0, _int(self._var_wait_max)) if action == "wait" else 0
 
         color_rgb = None
         skip_steps = 0
@@ -1940,6 +2315,10 @@ class StepDialog(tk.Toplevel):
         fish_target_color = None
         fish_kp = 0.3
         fish_kd = 0.15
+        fish_pd_clamp = 1.0
+        fish_min_pixels = 3
+        fish_wall_ratio = 0.0
+        fish_fps = 30
         if action == "fishing_pd_track":
             # Player/target colors via 3 entries cada
             def _rgb(vr, vg, vb):
@@ -1960,6 +2339,22 @@ class StepDialog(tk.Toplevel):
                 fish_kd = max(0.0, float(self._var_fish_kd.get() or "0.15"))
             except ValueError:
                 fish_kd = 0.15
+            try:
+                fish_pd_clamp = max(0.01, float(self._var_fish_pd_clamp.get() or "1.0"))
+            except ValueError:
+                fish_pd_clamp = 1.0
+            try:
+                fish_min_pixels = max(1, _int(self._var_fish_min_pixels, 3))
+            except ValueError:
+                fish_min_pixels = 3
+            try:
+                fish_wall_ratio = max(0.0, min(0.5, float(self._var_fish_wall_ratio.get() or "0.0")))
+            except ValueError:
+                fish_wall_ratio = 0.0
+            try:
+                fish_fps = max(0, _int(self._var_fish_fps, 30))
+            except ValueError:
+                fish_fps = 30
             # Reusa color_rgb (guia), ocr_w/ocr_h (regiao), color_tolerance, image_timeout_ms
             color_rgb = _rgb(self._var_color_r, self._var_color_g, self._var_color_b)
             color_tolerance = max(0, min(255, _int(self._var_tolerance, 5)))
@@ -2093,13 +2488,19 @@ class StepDialog(tk.Toplevel):
             fish_target_color=fish_target_color,
             fish_kp=fish_kp,
             fish_kd=fish_kd,
+            fish_pd_clamp=fish_pd_clamp,
+            fish_min_pixels=fish_min_pixels,
+            fish_wall_ratio=fish_wall_ratio,
+            fish_fps=fish_fps,
+            delay_ms_min=delay_ms_min,
+            delay_ms_max=delay_ms_max,
         )
         self.destroy()
 
     # ─────────────────────────────────────────────────────────────
     # HELPER BUTTON
     # ─────────────────────────────────────────────────────────────
-    def _btn(self, parent, text, command, bg, fg=None, padx=10, pady=5):
+    def _btn(self, parent, text, command, bg, fg=None, padx=12, pady=6):
         # Se fg não foi especificado, escolhe automaticamente baseado no bg
         if fg is None:
             try:

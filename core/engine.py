@@ -427,7 +427,13 @@ class MacroContext:
     """
 
     def __init__(self) -> None:
-        self.variables: dict[str, str | int | float] = {}
+        # Carrega variaveis persistentes ($-prefixadas) do disco.
+        # Variaveis novas setadas durante a run sao salvas em _notify_var.
+        try:
+            from core.persistent_vars import load_all as _load_persistent
+            self.variables: dict[str, str | int | float] = _load_persistent()
+        except Exception:
+            self.variables = {}
         self.last_match: tuple[int, int, int, int] | None = None  # (x,y,w,h)
         self.last_ocr_text: str = ""
         self.matches_queue: list = []
@@ -586,7 +592,15 @@ class SequentialRunner:
                 # wait também respeita branch (não dorme se está pulando)
                 is_skipping = any(s in ("skip", "skip_nested") for s in ctx.branch_stack)
                 if not is_skipping:
-                    time.sleep(step.delay_ms / spd / 1000)
+                    # Se max>0 e min<=max, sorteia delay aleatorio entre eles
+                    # (min pode ser 0 — "entre 0 e 100ms" e padrao util)
+                    wait_ms = step.delay_ms
+                    if (step.delay_ms_max and step.delay_ms_max > 0
+                            and step.delay_ms_max >= max(0, step.delay_ms_min or 0)):
+                        import random
+                        wait_ms = random.randint(max(0, step.delay_ms_min or 0),
+                                                  step.delay_ms_max)
+                    time.sleep(wait_ms / spd / 1000)
                 skip = 0
             else:
                 # Pré-delay só se NÃO estamos pulando (se/else/endif sempre processam)
@@ -616,6 +630,13 @@ class SequentialRunner:
         return re.sub(r"\{(\w+)\}", repl, value)
 
     def _notify_var(self, name: str, value: object) -> None:
+        # Persiste em disco se a var e $-prefixada (convencao de persistencia)
+        if name and name.startswith("$"):
+            try:
+                from core.persistent_vars import save_one
+                save_one(name, value)
+            except Exception:
+                pass
         if self._on_variable_change:
             try:
                 self._on_variable_change(name, value)
@@ -1010,6 +1031,8 @@ class SequentialRunner:
             self._do_ai_prompt(step, ctx)
         elif action == "fishing_pd_track":
             self._do_fishing_pd_track(step, ctx)
+        elif action == "note":
+            pass  # comentario decorativo; nao executa nada
         elif action == "set_var":
             if step.var_name:
                 resolved = self._resolve_var_value(step.var_value, ctx)
@@ -1186,12 +1209,25 @@ class SequentialRunner:
 
         try:
             import numpy as np
-            from PIL import ImageGrab
         except ImportError:
             return
+        # mss e ~6x mais rapido que PIL.ImageGrab. Fallback pro PIL se ausente.
+        try:
+            import mss  # type: ignore
+            _mss_inst = mss.mss()
+            _use_mss = True
+        except ImportError:
+            try:
+                from PIL import ImageGrab
+            except ImportError:
+                return
+            _mss_inst = None
+            _use_mss = False
 
         region = (int(step.x), int(step.y),
                   int(step.x + step.ocr_w), int(step.y + step.ocr_h))
+        mss_region = {"left": region[0], "top": region[1],
+                      "width": step.ocr_w, "height": step.ocr_h}
         guide  = np.array(step.color_rgb,        dtype=int)
         player = np.array(step.fish_player_color, dtype=int)
         target = np.array(step.fish_target_color, dtype=int)
@@ -1200,7 +1236,11 @@ class SequentialRunner:
         tol = max(0, int(step.color_tolerance if step.color_tolerance is not None else 5))
         kp  = float(step.fish_kp if step.fish_kp is not None else 0.3)
         kd  = float(step.fish_kd if step.fish_kd is not None else 0.15)
-        pd_clamp         = 1.0
+        pd_clamp         = max(0.01, float(step.fish_pd_clamp if step.fish_pd_clamp is not None else 1.0))
+        min_pixels       = max(1, int(step.fish_min_pixels if step.fish_min_pixels is not None else 3))
+        wall_ratio       = max(0.0, min(0.5, float(step.fish_wall_ratio if step.fish_wall_ratio is not None else 0.0)))
+        fps              = max(0, int(step.fish_fps if step.fish_fps is not None else 30))
+        frame_interval   = (1.0 / fps) if fps > 0 else 0.0
         damping_approach = 3.0
         damping_chase    = 0.5
         resend_interval  = 0.2  # s — resend mouseDown/Up pra prevenir desync no Roblox
@@ -1240,9 +1280,14 @@ class SequentialRunner:
                     last_scan_time = time.monotonic()
                     continue
 
-                # 1. Captura região
+                # 1. Captura região (mss=BGRA, PIL=RGB; sempre acessamos [...,:3] em RGB)
                 try:
-                    img = np.array(ImageGrab.grab(bbox=region))
+                    if _use_mss:
+                        shot = _mss_inst.grab(mss_region)
+                        # mss retorna BGRA; converte BGR -> RGB nas 3 primeiras chans
+                        img = np.array(shot, dtype=np.uint8)[..., :3][..., ::-1]
+                    else:
+                        img = np.array(ImageGrab.grab(bbox=region))
                 except Exception:
                     time.sleep(0.05)
                     continue
@@ -1257,15 +1302,18 @@ class SequentialRunner:
                 # 3. Slice vertical
                 col = img[:, middle_x, :]
 
-                # 4. Player (white)
+                # 4. Player (white) — exige min_pixels contiguos pra filtrar ruido
                 pmask = _color_mask(col, player)
                 if not np.any(pmask):
                     time.sleep(0.01)
                     continue
                 pys = np.where(pmask)[0]
+                if len(pys) < min_pixels:
+                    time.sleep(0.01)
+                    continue
                 player_y = int(np.mean(pys))
 
-                # 5. Target (dark) — pega o maior grupo contíguo
+                # 5. Target (dark) — pega o maior grupo contíguo (>=min_pixels)
                 tmask = _color_mask(col, target)
                 if not np.any(tmask):
                     time.sleep(0.01)
@@ -1281,6 +1329,9 @@ class SequentialRunner:
                         current = [int(tys[i])]
                 groups.append(current)
                 biggest = max(groups, key=len)
+                if len(biggest) < min_pixels:
+                    time.sleep(0.01)
+                    continue
                 target_y = (biggest[0] + biggest[-1]) // 2
 
                 # 6. PD control
@@ -1300,7 +1351,20 @@ class SequentialRunner:
                                 else damping_chase
                     d_term = -kd * damping * velocity
 
-                control = max(-pd_clamp, min(pd_clamp, p_term + d_term))
+                control = p_term + d_term
+
+                # Wall-clamping: se player perto da borda da regiao, forca max
+                # pra empurrar contra a parede (evita perder peixe nos extremos)
+                if wall_ratio > 0.0:
+                    region_h = img.shape[0]
+                    edge_top    = region_h * wall_ratio
+                    edge_bottom = region_h * (1.0 - wall_ratio)
+                    if player_y < edge_top:
+                        control = -pd_clamp     # forca hold (segura mouse)
+                    elif player_y > edge_bottom:
+                        control = pd_clamp      # forca release
+
+                control = max(-pd_clamp, min(pd_clamp, control))
                 should_hold = control <= 0
 
                 # 7. Aplica hold/release com resend periódico
@@ -1322,11 +1386,24 @@ class SequentialRunner:
                 last_error     = error
                 last_target_y  = target_y
                 last_scan_time = now
+
+                # FPS cap: dorme o restante do frame pra nao saturar CPU
+                if frame_interval > 0:
+                    elapsed = time.monotonic() - now
+                    sleep_t = frame_interval - elapsed
+                    if sleep_t > 0:
+                        time.sleep(sleep_t)
         finally:
             # Sempre solta mouse ao sair (sucesso, timeout, ou exception)
             if is_holding:
                 try:
                     self._driver.perform_mouse_up(button=button)
+                except Exception:
+                    pass
+            # Libera handles do mss (evita leak de GDI no Windows)
+            if _mss_inst is not None:
+                try:
+                    _mss_inst.close()
                 except Exception:
                     pass
 

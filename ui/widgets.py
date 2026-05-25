@@ -6,6 +6,151 @@ from __future__ import annotations
 import time
 import tkinter as tk
 
+# ── Constantes pra Toast ──────────────────────────────────────────────────────
+_TOAST_COLORS = {
+    "info":    {"bg": "#5865f2", "fg": "white"},   # blurple (info)
+    "success": {"bg": "#23a55a", "fg": "white"},   # verde Discord
+    "warning": {"bg": "#f0b232", "fg": "#1a1a1a"}, # ambar
+    "error":   {"bg": "#f23f43", "fg": "white"},   # vermelho Discord
+}
+_TOAST_ICONS = {
+    "info":    "ℹ",
+    "success": "✓",
+    "warning": "⚠",
+    "error":   "✕",
+}
+_TOAST_STACK: list["Toast"] = []
+_TOAST_MARGIN = 14
+_TOAST_GAP = 8
+
+
+class Toast:
+    """Notificacao efemera no canto inferior-direito da janela raiz.
+
+    Multiplas toasts empilham. Auto-destroem apos `duration_ms`.
+    Estilo determinado por `level`: info|success|warning|error.
+
+    Uso:
+        from ui.widgets import show_toast
+        show_toast(root, "Slot 1 salvo", level="success")
+    """
+
+    def __init__(self, root: tk.Tk, message: str,
+                  level: str = "info", duration_ms: int = 2800) -> None:
+        self._root = root
+        self._destroyed = False
+        colors = _TOAST_COLORS.get(level, _TOAST_COLORS["info"])
+        icon = _TOAST_ICONS.get(level, "")
+
+        self._tw = tk.Toplevel(root)
+        self._tw.overrideredirect(True)
+        self._tw.attributes("-topmost", True)
+        try:
+            self._tw.attributes("-alpha", 0.0)   # comeca invisivel pra fade-in
+        except Exception:
+            pass
+        self._tw.configure(bg=colors["bg"])
+
+        # Conteudo: icone + texto, padding generoso
+        frame = tk.Frame(self._tw, bg=colors["bg"], padx=14, pady=10)
+        frame.pack()
+        if icon:
+            tk.Label(frame, text=icon, bg=colors["bg"], fg=colors["fg"],
+                     font=("Segoe UI", 13, "bold")).pack(side="left", padx=(0, 8))
+        tk.Label(frame, text=message, bg=colors["bg"], fg=colors["fg"],
+                 font=("Segoe UI", 10), justify="left").pack(side="left")
+
+        _TOAST_STACK.append(self)
+        self._reposition_all()
+        self._fade_in()
+        # Auto-fechar
+        self._after_id = root.after(duration_ms, self._fade_out)
+        # Clique fecha imediatamente
+        self._tw.bind("<Button-1>", lambda e: self._fade_out())
+        for child in self._walk_children(self._tw):
+            child.bind("<Button-1>", lambda e: self._fade_out())
+
+    def _walk_children(self, w):
+        for c in w.winfo_children():
+            yield c
+            yield from self._walk_children(c)
+
+    def _fade_in(self, alpha: float = 0.0) -> None:
+        if self._destroyed:
+            return
+        alpha = min(1.0, alpha + 0.15)
+        try:
+            self._tw.attributes("-alpha", alpha)
+        except Exception:
+            return
+        if alpha < 1.0:
+            self._root.after(20, lambda: self._fade_in(alpha))
+
+    def _fade_out(self, alpha: float = 1.0) -> None:
+        if self._destroyed:
+            return
+        if alpha <= 0.0:
+            self._destroy()
+            return
+        try:
+            self._tw.attributes("-alpha", alpha)
+        except Exception:
+            self._destroy()
+            return
+        alpha -= 0.12
+        self._root.after(20, lambda: self._fade_out(alpha))
+
+    def _destroy(self) -> None:
+        if self._destroyed:
+            return
+        self._destroyed = True
+        try:
+            self._root.after_cancel(self._after_id)
+        except Exception:
+            pass
+        try:
+            self._tw.destroy()
+        except Exception:
+            pass
+        if self in _TOAST_STACK:
+            _TOAST_STACK.remove(self)
+        self._reposition_all()
+
+    def _reposition_all(self) -> None:
+        """Reposiciona todas as toasts ativas no canto inferior-direito da root."""
+        try:
+            self._root.update_idletasks()
+            root_x = self._root.winfo_rootx()
+            root_y = self._root.winfo_rooty()
+            root_w = self._root.winfo_width()
+            root_h = self._root.winfo_height()
+        except Exception:
+            return
+        y_offset = _TOAST_MARGIN
+        # Empilha de baixo pra cima (mais recente embaixo)
+        for toast in reversed(_TOAST_STACK):
+            if toast._destroyed:
+                continue
+            try:
+                toast._tw.update_idletasks()
+                tw_w = toast._tw.winfo_width()
+                tw_h = toast._tw.winfo_height()
+                x = root_x + root_w - tw_w - _TOAST_MARGIN
+                y = root_y + root_h - tw_h - y_offset
+                toast._tw.geometry(f"+{x}+{y}")
+                y_offset += tw_h + _TOAST_GAP
+            except Exception:
+                continue
+
+
+def show_toast(root: tk.Tk, message: str, level: str = "info",
+                duration_ms: int = 2800) -> Toast | None:
+    """Atalho pra criar uma Toast. Retorna None em caso de falha (testes headless)."""
+    try:
+        return Toast(root, message, level=level, duration_ms=duration_ms)
+    except Exception:
+        return None
+
 
 def _shift(hex_color: str, amount: int = 18) -> str:
     """Clareia tons escuros e escurece tons claros — universal pra dark+light."""
@@ -35,12 +180,15 @@ def make_button(
     fg: str = "white",
     font_size: int = 9,
     bold: bool = True,
-    padx: int = 10,
-    pady: int = 5,
+    padx: int = 12,
+    pady: int = 6,
     width: int | None = None,
     hover_bg: str | None = None,
 ) -> tk.Button:
-    """tk.Button estilo flat, hover sutil, cursor hand2."""
+    """tk.Button estilo flat, hover sutil, cursor hand2.
+
+    Defaults modernos: padx=12, pady=6 (mais espaco visual que o padrao do tk).
+    """
     font = ("Segoe UI", font_size, "bold" if bold else "normal")
     kw: dict = dict(bg=bg, fg=fg, font=font, relief="flat",
                     padx=padx, pady=pady, cursor="hand2",
@@ -49,7 +197,7 @@ def make_button(
     if width is not None:
         kw["width"] = width
     btn = tk.Button(parent, text=text, command=command, **kw)
-    hover_in = hover_bg or _shift(bg)
+    hover_in = hover_bg or _shift(bg, amount=22)   # hover ligeiramente mais visivel
     btn.bind("<Enter>", lambda e: btn.config(bg=hover_in))
     btn.bind("<Leave>", lambda e: btn.config(bg=bg))
     btn.config(activebackground=hover_in)

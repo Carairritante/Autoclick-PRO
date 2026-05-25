@@ -34,9 +34,10 @@ from ui.step_dialog import (
     ACTION_LABELS,
     StepDialog,
     StopConditionDialog,
+    get_action_category,
     step_to_params_str,
 )
-from ui.theme import T
+from ui.theme import T, CT
 from ui.widgets import Tooltip
 
 
@@ -82,7 +83,7 @@ class MacroMixin:
 
         self.macro_tree = ttk.Treeview(
             tree_frame,
-            columns=("n", "action", "params", "delay"),
+            columns=("n", "action", "params", "delay", "acts"),
             show="headings",
             height=10,
             selectmode="browse",
@@ -91,11 +92,26 @@ class MacroMixin:
         for col, head, w, anchor in [
             ("n",      "#",           32,  "center"),
             ("action", "Ação",       148,  "w"),
-            ("params", "Parâmetros", 258,  "w"),
+            ("params", "Parâmetros", 218,  "w"),
             ("delay",  "Delay (ms)",  90,  "center"),
+            # Coluna de acoes inline: ✏ Editar  ⧉ Duplicar  ✕ Remover
+            # Click detectado por x dentro do cell em _on_acts_click
+            ("acts",   "Ações",       70,  "center"),
         ]:
             self.macro_tree.heading(col, text=head)
             self.macro_tree.column(col, width=w, anchor=anchor, minwidth=w)
+        # Click handler pra coluna de acoes
+        self.macro_tree.bind("<Button-1>", self._macro_on_tree_click, add="+")
+        # Cursor de mao quando passa sobre a coluna de acoes
+        self.macro_tree.bind("<Motion>", self._macro_on_tree_motion, add="+")
+        # Drag-and-drop: ButtonPress inicia, B1-Motion arrasta, Release solta
+        self.macro_tree.bind("<ButtonPress-1>", self._macro_on_drag_press, add="+")
+        self.macro_tree.bind("<B1-Motion>", self._macro_on_drag_motion, add="+")
+        self.macro_tree.bind("<ButtonRelease-1>", self._macro_on_drag_release, add="+")
+        # Estado do drag (init aqui pra evitar AttributeError no primeiro press)
+        self._drag_start_idx: int | None = None
+        self._drag_start_y: int = 0
+        self._drag_active: bool = False
 
         macro_vsb = ttk.Scrollbar(tree_frame, orient="vertical",
                                    command=self.macro_tree.yview)
@@ -312,7 +328,7 @@ class MacroMixin:
         )
 
     def _collect_ui_profile(self) -> UIProfile:
-        """Coleta preferências de UI (hotkeys, som)."""
+        """Coleta preferências de UI (hotkeys, som, multi-roblox)."""
         return UIProfile(
             hk_clk=self.var_hk_clk.get(),
             hk_key=self.var_hk_key.get(),
@@ -321,6 +337,7 @@ class MacroMixin:
             hk_stop=self.var_hk_stop.get(),
             hk_pause=self.var_hk_pause.get(),
             sound=self.var_sound.get(),
+            multi_roblox=bool(self.var_multi_roblox.get()),
         )
 
     def _apply_script(self, script: MacroScript) -> None:
@@ -399,6 +416,17 @@ class MacroMixin:
         self.var_hk_stop.set(ui.hk_stop)
         self.var_hk_pause.set(getattr(ui, "hk_pause", "pause"))
         self.var_sound.set(bool(ui.sound))
+        # multi-roblox: aplica preferencia salva (cria/libera mutex de acordo)
+        mr_pref = bool(getattr(ui, "multi_roblox", False))
+        self.var_multi_roblox.set(mr_pref)
+        try:
+            from core import multi_roblox as _mr
+            if mr_pref:
+                _mr.enable()
+            else:
+                _mr.disable()
+        except Exception:
+            pass
         self._rebind_hotkeys()
         for key, var in [("clk", self.var_hk_clk), ("key", self.var_hk_key),
                          ("macro", self.var_hk_macro), ("rec", self.var_hk_rec),
@@ -486,6 +514,12 @@ class MacroMixin:
         self._set_pill(self._pill_mcr, True, T["green"])
         self._run_indicator_start()
         self._set_status("▶  macro executando...")
+        try:
+            from ui.widgets import show_toast
+            show_toast(self, f"Macro iniciado ({len(self._macro_steps)} steps)",
+                       level="success")
+        except Exception:
+            pass
         # Notifica monitores de evento (ntfy)
         try: self._ntfy.fire_event("macro_started")
         except Exception: pass
@@ -545,12 +579,20 @@ class MacroMixin:
             self._run_indicator_stop()
         # Se _on_macro_stop_condition já notificou (com label específico),
         # pula a notify genérica aqui pra não duplicar.
+        try:
+            from ui.widgets import show_toast
+        except Exception:
+            show_toast = None
         if getattr(self, "_stopped_by_cond", False):
             self._set_status("⏹  macro parado.")
+            if show_toast:
+                show_toast(self, "Macro parado por condição", level="info")
             self._stopped_by_cond = False
         else:
             self._set_status("⏹  macro parado.")
             self._notify_macro_done()
+            if show_toast:
+                show_toast(self, "Macro parado", level="info")
             # Notifica monitores ntfy de evento (apenas se NÃO foi por condition,
             # pra evitar duas notifs no celular por uma só execução)
             try: self._ntfy.fire_event("macro_stopped")
@@ -601,6 +643,113 @@ class MacroMixin:
             self._macro_push_undo()
             self._macro_steps.append(dlg.result)
             self._macro_refresh_tree()
+
+    def _macro_on_tree_motion(self, event) -> None:
+        """Muda cursor pra mao quando sobre a coluna de acoes."""
+        region = self.macro_tree.identify_region(event.x, event.y)
+        if region == "cell":
+            col = self.macro_tree.identify_column(event.x)
+            if col == "#5":   # 'acts' (5a coluna em columns=())
+                self.macro_tree.config(cursor="hand2")
+                return
+        self.macro_tree.config(cursor="")
+
+    def _macro_on_tree_click(self, event) -> None:
+        """Roteia click na coluna 'acts' pra editar/duplicar/remover.
+
+        Detecta qual icone pelo x relativo dentro do cell:
+        coluna dividida em 3 tercos = editar | duplicar | remover.
+        """
+        region = self.macro_tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        col = self.macro_tree.identify_column(event.x)
+        if col != "#5":
+            return  # nao e a coluna de acoes — deixa o Treeview tratar normal
+        row_id = self.macro_tree.identify_row(event.y)
+        if not row_id:
+            return
+        bbox = self.macro_tree.bbox(row_id, col)
+        if not bbox:
+            return
+        bx, _by, bw, _bh = bbox
+        rel_x = event.x - bx
+        third = bw / 3
+        # Seleciona a linha clicada antes de agir
+        self.macro_tree.selection_set(row_id)
+        if rel_x < third:
+            self._macro_edit_step()
+        elif rel_x < 2 * third:
+            self._macro_duplicate_step()
+        else:
+            self._macro_remove_step()
+        return "break"   # impede default (que reordenaria selecao)
+
+    # ── Drag-and-drop pra reordenar steps ────────────────────────
+    def _macro_on_drag_press(self, event) -> None:
+        """Inicia drag se o press for em coluna != acts (acts e click handler)."""
+        region = self.macro_tree.identify_region(event.x, event.y)
+        if region != "cell":
+            self._drag_start_idx = None
+            return
+        col = self.macro_tree.identify_column(event.x)
+        if col == "#5":   # coluna acts — _macro_on_tree_click cuida
+            self._drag_start_idx = None
+            return
+        row_id = self.macro_tree.identify_row(event.y)
+        if not row_id:
+            self._drag_start_idx = None
+            return
+        self._drag_start_idx = self.macro_tree.index(row_id)
+        self._drag_start_y = event.y
+        self._drag_active = False
+
+    def _macro_on_drag_motion(self, event) -> None:
+        """Em movimento >5px, ativa drag e atualiza selecao pro target."""
+        if self._drag_start_idx is None:
+            return
+        if not self._drag_active:
+            if abs(event.y - self._drag_start_y) < 5:
+                return  # threshold pra distinguir click acidental
+            self._drag_active = True
+            self.macro_tree.config(cursor="fleur")  # cursor de "mover"
+        # Highlight da linha sobre a qual estamos = drop target visual
+        target_row = self.macro_tree.identify_row(event.y)
+        if target_row:
+            self.macro_tree.selection_set(target_row)
+
+    def _macro_on_drag_release(self, event) -> None:
+        """Solta: se estava arrastando, reordena _macro_steps."""
+        src_idx = self._drag_start_idx
+        was_active = self._drag_active
+        # Sempre reseta estado, ate em caso de erro
+        self._drag_start_idx = None
+        self._drag_active = False
+        self.macro_tree.config(cursor="")
+
+        if not was_active or src_idx is None:
+            return
+        target_row = self.macro_tree.identify_row(event.y)
+        if not target_row:
+            return
+        target_idx = self.macro_tree.index(target_row)
+        if src_idx == target_idx:
+            return  # solto no mesmo lugar
+        if not (0 <= src_idx < len(self._macro_steps)):
+            return
+        if not (0 <= target_idx < len(self._macro_steps)):
+            return
+        # Reordena com modelo "displacement": item solto em target_idx termina
+        # em target_idx, demais shiftam pra cobrir o gap. pop+insert direto
+        # tem essa semantica naturalmente em listas Python.
+        self._macro_push_undo()
+        step = self._macro_steps.pop(src_idx)
+        self._macro_steps.insert(target_idx, step)
+        self._macro_refresh_tree()
+        items = self.macro_tree.get_children()
+        if 0 <= target_idx < len(items):
+            self.macro_tree.selection_set(items[target_idx])
+            self.macro_tree.see(items[target_idx])
 
     def _macro_edit_step(self) -> None:
         sel = self.macro_tree.selection()
@@ -784,6 +933,10 @@ class MacroMixin:
                 self._macro_empty_lbl.place_forget()
             else:
                 self._macro_empty_lbl.place(relx=0.5, rely=0.5, anchor="center")
+        # (Re)configura tags de categoria toda refresh — cobre theme toggle
+        # sem precisar de hook adicional. Operacao barata.
+        for cat, color in CT.items():
+            self.macro_tree.tag_configure(cat, background=color, foreground=T["text"])
         depth = 0
         for i, step in enumerate(self._macro_steps):
             # endif sai do bloco ANTES de exibir (volta a ficar alinhado com o if)
@@ -800,12 +953,15 @@ class MacroMixin:
             params = step_to_params_str(step)
             if step.rel_x is not None and step.rel_y is not None:
                 params = f"{params}  [{step.rel_x*100:.0f}%, {step.rel_y*100:.0f}%]"
+            category = get_action_category(step.action)
+            # acts: 3 icones separados por spaces — click handler usa x pra rotear
             self.macro_tree.insert("", "end", values=(
                 i + 1,
                 action_label,
                 params,
                 step.delay_ms,
-            ))
+                "✏  ⧉  ✕",
+            ), tags=(category,))
             # if entra em bloco DEPOIS de exibir (próximos ficam indentados)
             if step.action == "if":
                 depth += 1

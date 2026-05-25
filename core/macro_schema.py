@@ -109,6 +109,15 @@ class MacroStep:
     fish_target_color: list | None = None    # cor do alvo movel (zona alvo)
     fish_kp: float = 0.3                     # ganho proporcional do PD
     fish_kd: float = 0.15                    # ganho derivativo do PD
+    fish_pd_clamp: float = 1.0               # limite max do sinal de controle (anti-overcorrection)
+    fish_min_pixels: int = 3                 # ignora deteccoes menores que N pixels (filtra ruido)
+    fish_wall_ratio: float = 0.0             # 0=off; >0=quando marcador <N% da borda, forca max pra parede
+    fish_fps: int = 30                       # capturas por segundo (anti-CPU; 0=sem limite)
+    # wait — opcionalmente delay aleatorio entre delay_ms_min e delay_ms_max
+    # (se ambos > 0, sorteia; senao usa delay_ms fixo)
+    delay_ms_min: int = 0
+    delay_ms_max: int = 0
+    # note — nao executa; so exibe step.text como label decorativo na lista
 
 
 @dataclass
@@ -182,6 +191,9 @@ class UIProfile:
     hk_rec: str = "f10"
     hk_pause: str = "pause"
     sound: bool = False
+    # Multi-Roblox: cria mutex ROBLOX_singletonEvent pra permitir varias
+    # instancias simultaneas. Ver core/multi_roblox.py.
+    multi_roblox: bool = False
 
 
 # ── Serialização ──────────────────────────────────────────────────────────────

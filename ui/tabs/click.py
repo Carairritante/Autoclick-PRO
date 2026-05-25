@@ -54,22 +54,15 @@ class ClickMixin:
                            activebackground=T["bg"],
                            font=("Segoe UI", 10)).pack(side="left", padx=8)
 
-        # Click type + burst
-        self._section(p, "Tipo de Clique  •  Rajada", "👆 ").pack(fill="x", padx=8, pady=2)
+        # Click type (burst removido da UI; campo continua no schema com default=1
+        # pra retrocompat de perfis antigos)
+        self._section(p, "Tipo de Clique", "👆 ").pack(fill="x", padx=8, pady=2)
         row2 = tk.Frame(p, bg=T["bg"]); row2.pack(fill="x", padx=14, pady=(2, 4))
         for txt, val in [("Simples", "single"), ("Duplo", "double")]:
             tk.Radiobutton(row2, text=txt, variable=self.var_click_type, value=val,
                            bg=T["bg"], fg=T["text"], selectcolor=T["sel"],
                            activebackground=T["bg"],
                            font=("Segoe UI", 10)).pack(side="left", padx=8)
-        tk.Label(row2, text="  Rajada:", bg=T["bg"], fg=T["subtext"],
-                 font=("Segoe UI", 10)).pack(side="left", padx=(8, 2))
-        tk.Entry(row2, textvariable=self.var_burst, width=3,
-                 bg=T["card"], fg=T["text"], insertbackground=T["text"],
-                 font=("Consolas", 11), justify="center",
-                 relief="flat", bd=4).pack(side="left")
-        tk.Label(row2, text=" /ciclo", bg=T["bg"], fg=T["subtext"],
-                 font=("Segoe UI", 9)).pack(side="left", padx=2)
 
         # Interval
         self._section(p, "Intervalo entre Cliques", "⏱ ").pack(fill="x", padx=8, pady=2)
